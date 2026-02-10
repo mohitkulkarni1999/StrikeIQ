@@ -144,8 +144,8 @@ async def get_upstox_auth_url():
 async def upstox_auth_callback(code: str = Query(None)):
     """Handle Upstox OAuth callback"""
     try:
-        from app.services.upstox_auth_service import get_upstox_auth_service
-        auth_service = get_upstox_auth_service()
+        from app.services.upstox_auth_service import UpstoxAuthService
+        auth_service = UpstoxAuthService()
         
         # Debug logging
         logger.info(f"Received callback with code: {code}")
@@ -154,7 +154,7 @@ async def upstox_auth_callback(code: str = Query(None)):
             logger.error("No authorization code received")
             raise ValueError("Authorization code is required")
         
-        token_data = await auth_service.exchange_code_for_token(code)
+        token_data = auth_service.exchange_code_for_token(code)
         
         # Store token in environment for now (in production, use secure storage)
         import os
