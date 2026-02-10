@@ -1,11 +1,19 @@
 import { RealTimeSignals } from '../types/market';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
 
 interface BiasMeterProps {
   signals: RealTimeSignals;
 }
 
 export default function BiasMeter({ signals }: BiasMeterProps) {
+  if (!signals || !signals.bias_signal) {
+    return (
+      <div className="bg-gray-800 rounded-lg p-4">
+        <h3 className="text-white text-sm font-medium mb-2">Market Bias</h3>
+        <div className="text-gray-400 text-sm">No bias data available</div>
+      </div>
+    );
+  }
+  
   const { bias_signal } = signals;
   const confidence = bias_signal.confidence;
   const action = bias_signal.action;
@@ -25,11 +33,11 @@ export default function BiasMeter({ signals }: BiasMeterProps) {
   const getBiasIcon = (action: string) => {
     switch (action) {
       case 'BUY':
-        return <TrendingUp className="w-8 h-8" />;
+        return <span className="text-3xl">📈</span>;
       case 'SELL':
-        return <TrendingDown className="w-8 h-8" />;
+        return <span className="text-3xl">📉</span>;
       default:
-        return <Minus className="w-8 h-8" />;
+        return <span className="text-3xl">➖</span>;
     }
   };
 

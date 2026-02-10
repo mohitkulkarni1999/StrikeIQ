@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
+import uvicorn
 
 from app.core.config import settings
 from app.models.database import get_db
@@ -91,7 +92,7 @@ async def health_check():
     return {"status": "healthy", "timestamp": "2024-01-10T14:30:00Z"}
 
 
-@app.get("/api/v1/dashboard/{symbol}")
+@app.get("/api/dashboard/{symbol}")
 async def get_dashboard_data(symbol: str, db: Depends = Depends(get_db)):
     """Get real-time dashboard data for a symbol"""
     try:

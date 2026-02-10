@@ -151,4 +151,5 @@ export interface MarketData {
   real_time_signals: RealTimeSignals;
   historical_analysis: HistoricalData[];
   market_status: string;
+  message?: string;
 }

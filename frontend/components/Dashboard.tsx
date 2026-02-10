@@ -20,8 +20,8 @@ export default function Dashboard({ data }: DashboardProps) {
   }
 
   // Check if market is closed
-  const isMarketClosed = data.current_market?.market_status === "CLOSED";
-  const hasError = data.current_market?.market_status === "ERROR";
+  const isMarketClosed = data.market_status === "closed";
+  const hasError = data.market_status === "error";
 
   if (isMarketClosed) {
     return (
@@ -39,7 +39,7 @@ export default function Dashboard({ data }: DashboardProps) {
                 Market Closed
               </h2>
               <p className="text-muted-foreground mb-4">
-                {data.current_market?.message || "Market is currently closed"}
+                {data.message || "Market is currently closed"}
               </p>
               <div className="text-sm text-muted-foreground">
                 <p>📈 Live data available during:</p>

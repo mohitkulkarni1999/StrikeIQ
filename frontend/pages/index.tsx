@@ -41,18 +41,17 @@ export default function Home() {
   const fetchMarketData = async () => {
     try {
       setLoading(true);
-      const response = await fetch(`/api/dashboard/${selectedSymbol}`);
+      const response = await fetch(`http://localhost:8000/api/dashboard/${selectedSymbol}`);
       const data = await response.json();
       
-      if (data.status === 'success') {
-        setMarketData(data.data);
-        
-        // Stop polling if market is closed
-        if (data.data.current_market?.market_status === 'CLOSED') {
-          setLoading(false);
-          return; // Don't continue polling
-        }
+      setMarketData(data);
+      
+      // Stop polling if market is closed
+      if (data.market_status === 'closed') {
+        setLoading(false);
+        return; // Don't continue polling
       }
+
     } catch (error) {
       console.error('Error fetching market data:', error);
     } finally {
