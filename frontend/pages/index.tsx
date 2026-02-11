@@ -1,60 +1,53 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Dashboard from '../components/Dashboard';
-import { MarketData } from '../types/market';
+import { DashboardResponse } from '../types/dashboard';
 
 export default function Home() {
-  const [marketData, setMarketData] = useState<MarketData | null>(null);
+  const [data, setData] = useState<DashboardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [selectedSymbol, setSelectedSymbol] = useState('NIFTY');
 
   useEffect(() => {
     fetchMarketData();
-    
-    // Only set up interval if we don't have market closed data yet
+
+    // Set up polling only if not loading and not in auth mode
     let interval: NodeJS.Timeout | null = null;
-    
-    if (!marketData?.current_market?.market_status || marketData?.current_market?.market_status !== 'CLOSED') {
+
+    const shouldPoll = () => {
+      if (data && 'session_type' in data && data.session_type === 'AUTH_REQUIRED') {
+        return false; // Don't poll if auth required
+      }
+      if (data && 'market_status' in data && data.market_status === 'CLOSED') {
+        return false; // Don't poll if market closed
+      }
+      return true;
+    };
+
+    if (shouldPoll()) {
       interval = setInterval(fetchMarketData, 5000); // Refresh every 5 seconds
     }
-    
+
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [selectedSymbol, marketData?.current_market?.market_status]);
-
-  // Prevent scroll anchoring on data updates - only when market is open
-  useEffect(() => {
-    // Only prevent scrolling when market is open and data is changing
-    if (marketData?.current_market?.market_status !== 'CLOSED') {
-      const preventScrollAnchoring = () => {
-        if ('scrollRestoration' in history) {
-          history.scrollRestoration = 'manual';
-        }
-        window.scrollTo({ top: window.scrollY, behavior: 'auto' });
-      };
-
-      preventScrollAnchoring();
-    }
-  }, [marketData]);
+  }, [selectedSymbol, data]);
 
   const fetchMarketData = async () => {
     try {
-      setLoading(true);
-      const response = await fetch(`http://localhost:8000/api/dashboard/${selectedSymbol}`);
-      const data = await response.json();
-      
-      setMarketData(data);
-      
-      // Stop polling if market is closed
-      if (data.market_status === 'closed') {
-        setLoading(false);
-        return; // Don't continue polling
-      }
+      console.log('Fetching market data for:', selectedSymbol);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+      const response = await fetch(`${apiUrl}/api/dashboard/${selectedSymbol}`);
+      const responseData: DashboardResponse = await response.json();
+
+      console.log('Received data:', responseData);
+      console.log('Response status:', response.status);
+
+      setData(responseData);
+      setLoading(false);
 
     } catch (error) {
       console.error('Error fetching market data:', error);
-    } finally {
       setLoading(false);
     }
   };
@@ -64,7 +57,7 @@ export default function Home() {
       <Head>
         <title>StrikeIQ - Options Market Intelligence</title>
         <meta name="description" content="AI-powered options market intelligence for Indian markets" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <meta name="viewport" content="width=device-width= initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
       </Head>
 
@@ -76,7 +69,7 @@ export default function Home() {
                 <h1 className="text-4xl font-bold text-gradient mb-2">StrikeIQ</h1>
                 <p className="text-muted-foreground">AI-Powered Options Market Intelligence</p>
               </div>
-              
+
               <div className="flex items-center gap-4">
                 <select
                   value={selectedSymbol}
@@ -86,10 +79,15 @@ export default function Home() {
                   <option value="NIFTY">NIFTY</option>
                   <option value="BANKNIFTY">BANKNIFTY</option>
                 </select>
-                
+
                 <div className="flex items-center gap-2">
-                  <div className="status-indicator status-online"></div>
-                  <span className="text-sm text-muted-foreground">Live</span>
+                  <div className={`status-indicator ${
+                    data && 'market_status' in data && data.market_status === 'OPEN' ? 'status-online' : 'status-offline'
+                  }`}></div>
+                  <span className="text-sm text-muted-foreground">
+                    {data && 'session_type' in data ? 'Auth Required' : 
+                     data && 'market_status' in data ? data.market_status : 'Loading'}
+                  </span>
                 </div>
               </div>
             </div>
@@ -104,7 +102,7 @@ export default function Home() {
               </div>
             </div>
           ) : (
-            <Dashboard data={marketData} />
+            <Dashboard data={data} />
           )}
         </div>
       </main>

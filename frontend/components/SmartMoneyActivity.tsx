@@ -6,6 +6,16 @@ interface SmartMoneyActivityProps {
 }
 
 export default function SmartMoneyActivity({ signals }: SmartMoneyActivityProps) {
+  if (!signals) {
+    return (
+      <div className="glass-morphism rounded-xl p-6">
+        <div className="text-center text-muted-foreground">
+          <p>No smart money data available</p>
+        </div>
+      </div>
+    );
+  }
+
   const { smart_money_signal } = signals;
   const signal = smart_money_signal.signal;
   const action = smart_money_signal.action;

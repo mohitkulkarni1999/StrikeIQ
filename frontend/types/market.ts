@@ -147,9 +147,12 @@ export interface HistoricalData {
 }
 
 export interface MarketData {
-  current_market: CurrentMarket;
-  real_time_signals: RealTimeSignals;
-  historical_analysis: HistoricalData[];
-  market_status: string;
-  message?: string;
+  symbol: string;
+  spot_price: number | null;
+  previous_close: number | null;
+  change: number | null;
+  change_percent: number | null;
+  timestamp: string;
+  market_status: 'OPEN' | 'CLOSED' | 'ERROR';
+  exchange_timestamp?: string;
 }

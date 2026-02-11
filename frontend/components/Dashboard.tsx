@@ -1,28 +1,112 @@
-import { MarketData } from '../types/market';
+import React, { useState, useEffect } from 'react';
+import { DashboardResponse, isAuthRequired, isMarketData, MarketData } from '../types/dashboard';
+import { useAuth } from '../contexts/AuthContext';
 import BiasMeter from './BiasMeter';
 import ExpectedMoveChart from './ExpectedMoveChart';
 import SmartMoneyActivity from './SmartMoneyActivity';
 import MarketMetrics from './MarketMetrics';
 import OIHeatmap from './OIHeatmap';
 import SignalCards from './SignalCards';
+import AuthScreen from './AuthScreen';
 
 interface DashboardProps {
-  data: MarketData | null;
+  data: DashboardResponse | null;
 }
 
-export default function Dashboard({ data }: DashboardProps) {
+function DashboardComponent({ data }: DashboardProps) {
+  const { state: authState, handleAuthRequired } = useAuth();
+  const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
+
+  // Handle auth required responses
+  useEffect(() => {
+    if (data && isAuthRequired(data)) {
+      handleAuthRequired(data);
+      
+      // Stop polling
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+    }
+  }, [data, handleAuthRequired, pollingInterval]);
+
+  // Setup polling for authenticated state
+  useEffect(() => {
+    if (authState.isAuthenticated && !pollingInterval) {
+      const interval = setInterval(() => {
+        // Trigger data refresh - this would be handled by parent component
+        window.dispatchEvent(new CustomEvent('refreshData'));
+      }, 5000); // Poll every 5 seconds
+      
+      setPollingInterval(interval);
+    }
+
+    // Cleanup on unmount or auth state change
+    return () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+      }
+    };
+  }, [authState.isAuthenticated, pollingInterval]);
+
+  // Stop polling listener
+  useEffect(() => {
+    const handleStopPolling = () => {
+      if (pollingInterval) {
+        clearInterval(pollingInterval);
+        setPollingInterval(null);
+      }
+    };
+
+    window.addEventListener('stopPolling', handleStopPolling);
+    return () => window.removeEventListener('stopPolling', handleStopPolling);
+  }, [pollingInterval]);
+
+  // Show loading state
   if (!data) {
     return (
-      <div className="text-center text-muted-foreground">
-        No market data available
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4 animate-spin">
+            <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+          </div>
+          <p className="text-white text-lg">Loading market data...</p>
+        </div>
       </div>
     );
   }
 
-  // Check if market is closed
-  const isMarketClosed = data.market_status === "closed";
-  const hasError = data.market_status === "error";
+  // Show auth screen if authentication required
+  if (isAuthRequired(data)) {
+    return <AuthScreen authData={data} />;
+  }
 
+  // Show market data if authenticated
+  if (isMarketData(data)) {
+    return <MarketDashboard marketData={data} />;
+  }
+
+  // Fallback
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+      <div className="text-center text-white">
+        <p>Unknown response format</p>
+      </div>
+    </div>
+  );
+}
+
+interface MarketDashboardProps {
+  marketData: MarketData;
+}
+
+function MarketDashboard({ marketData }: MarketDashboardProps) {
+  // Check if market is closed
+  const isMarketClosed = marketData.market_status === "CLOSED";
+  const hasError = marketData.market_status === "ERROR";
+  
   if (isMarketClosed) {
     return (
       <div className="space-y-6">
@@ -39,7 +123,7 @@ export default function Dashboard({ data }: DashboardProps) {
                 Market Closed
               </h2>
               <p className="text-muted-foreground mb-4">
-                {data.message || "Market is currently closed"}
+                Market is currently closed. Trading hours are 9:15 AM - 3:30 PM IST.
               </p>
               <div className="text-sm text-muted-foreground">
                 <p>📈 Live data available during:</p>
@@ -47,16 +131,6 @@ export default function Dashboard({ data }: DashboardProps) {
               </div>
             </div>
           </div>
-        </div>
-
-        {/* Symbol Header */}
-        <div className="glass-morphism rounded-xl p-6">
-          <h2 className="text-2xl font-semibold mb-2">
-            {data.current_market.symbol}
-          </h2>
-          <p className="text-muted-foreground">
-            Waiting for market to open...
-          </p>
         </div>
       </div>
     );
@@ -78,7 +152,7 @@ export default function Dashboard({ data }: DashboardProps) {
                 Data Unavailable
               </h2>
               <p className="text-muted-foreground">
-                {data.current_market?.message || "Unable to fetch live data"}
+                Unable to fetch live data
               </p>
             </div>
           </div>
@@ -94,30 +168,30 @@ export default function Dashboard({ data }: DashboardProps) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-semibold mb-2">
-              {data.current_market.symbol}
+              {marketData.symbol}
             </h2>
             <div className="flex items-center gap-4">
               <span className="text-3xl font-bold">
-                {data.current_market.spot_price ? 
-                  `₹${data.current_market.spot_price.toLocaleString('en-IN', {
+                {marketData.spot_price ? 
+                  `₹${marketData.spot_price.toLocaleString('en-IN', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
                   })}` : 
                   'Loading...'
                 }
               </span>
-              {data.current_market.change !== null && data.current_market.change !== undefined && (
+              {marketData.change !== null && marketData.change !== undefined && (
                 <span
                   className={`text-lg font-medium ${
-                    data.current_market.change >= 0
+                    marketData.change >= 0
                       ? 'text-success-500'
                       : 'text-danger-500'
                   }`}
                 >
-                  {data.current_market.change >= 0 ? '+' : ''}
-                  {data.current_market.change.toFixed(2)} (
-                  {data.current_market.change_percent >= 0 ? '+' : ''}
-                  {(data.current_market.change_percent * 100).toFixed(2)}%)
+                  {marketData.change >= 0 ? '+' : ''}
+                  {marketData.change.toFixed(2)} (
+                  {marketData.change_percent >= 0 ? '+' : ''}
+                  {(marketData.change_percent * 100).toFixed(2)}%)
                 </span>
               )}
             </div>
@@ -127,10 +201,10 @@ export default function Dashboard({ data }: DashboardProps) {
             <div className="flex items-center gap-2">
               <div
                 className={`status-indicator ${
-                  data.market_status === 'open' ? 'status-online' : 'status-offline'
+                  marketData.market_status === 'OPEN' ? 'status-online' : 'status-offline'
                 }`}
               ></div>
-              <span className="capitalize">{data.market_status}</span>
+              <span className="capitalize">{marketData.market_status}</span>
             </div>
           </div>
         </div>
@@ -140,29 +214,31 @@ export default function Dashboard({ data }: DashboardProps) {
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Bias Meter - Takes 1/3 width */}
         <div className="lg:col-span-1">
-          <BiasMeter signals={data.real_time_signals} />
+          <BiasMeter signals={null} />
         </div>
 
         {/* Expected Move Chart - Takes 2/3 width */}
         <div className="lg:col-span-2">
-          <ExpectedMoveChart signals={data.real_time_signals} />
+          <ExpectedMoveChart signals={null} />
         </div>
       </div>
 
       {/* Second Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Smart Money Activity */}
-        <SmartMoneyActivity signals={data.real_time_signals} />
+        <SmartMoneyActivity signals={null} />
 
         {/* Market Metrics */}
-        <MarketMetrics data={data} />
+        <MarketMetrics data={marketData} />
       </div>
 
       {/* Third Row - Signal Cards */}
-      <SignalCards signals={data.real_time_signals} />
+      <SignalCards signals={null} />
 
       {/* OI Heatmap - Full Width */}
-      <OIHeatmap symbol={data.current_market.symbol} />
+      <OIHeatmap symbol={marketData.symbol} />
     </div>
   );
 }
+
+export default React.memo(DashboardComponent);

@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
+import { useAuth } from '../../contexts/AuthContext'
+import OAuthHandler from '../../components/OAuthHandler'
 
 export default function AuthSuccess() {
   const router = useRouter()
+  const { checkAuth } = useAuth()
   const [status, setStatus] = useState('loading')
 
   useEffect(() => {
@@ -12,13 +15,16 @@ export default function AuthSuccess() {
     
     setStatus(authStatus || 'unknown')
     
-    // Redirect to main dashboard after 2 seconds
+    // If auth successful, trigger auth context refresh and redirect
     if (authStatus === 'success') {
+      // Trigger auth context to re-check authentication
       setTimeout(() => {
-        router.push('/')
-      }, 2000)
+        checkAuth().then(() => {
+          router.push('/')
+        })
+      }, 1000)
     }
-  }, [router])
+  }, [router, checkAuth])
 
   return (
     <>
@@ -29,6 +35,14 @@ export default function AuthSuccess() {
       
       <div className="min-h-screen bg-gradient-to-br from-gray-900 via-blue-900 to-purple-900 flex items-center justify-center">
         <div className="text-center">
+          <OAuthHandler onAuthSuccess={() => {
+            setStatus('success');
+            setTimeout(() => {
+              checkAuth().then(() => {
+                router.push('/')
+              })
+            }, 1000);
+          }} />
           {status === 'success' ? (
             <>
               <div className="mb-8">

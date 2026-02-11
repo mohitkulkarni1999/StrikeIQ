@@ -6,6 +6,16 @@ interface ExpectedMoveChartProps {
 }
 
 export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
+  if (!signals) {
+    return (
+      <div className="glass-morphism rounded-xl p-6">
+        <div className="text-center text-muted-foreground">
+          <p>No signal data available</p>
+        </div>
+      </div>
+    );
+  }
+
   const { expected_move_signal } = signals;
   const signal = expected_move_signal.signal;
   const action = expected_move_signal.action;

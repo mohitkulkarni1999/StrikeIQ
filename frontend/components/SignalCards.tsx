@@ -6,6 +6,16 @@ interface SignalCardsProps {
 }
 
 export default function SignalCards({ signals }: SignalCardsProps) {
+  if (!signals) {
+    return (
+      <div className="glass-morphism rounded-xl p-6">
+        <div className="text-center text-muted-foreground">
+          <p>No signal data available</p>
+        </div>
+      </div>
+    );
+  }
+
   const { bias_signal, expected_move_signal, smart_money_signal, overall_signal } = signals;
 
   const signalCards = [

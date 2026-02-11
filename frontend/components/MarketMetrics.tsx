@@ -6,14 +6,12 @@ interface MarketMetricsProps {
 }
 
 export default function MarketMetrics({ data }: MarketMetricsProps) {
-  const { current_market, real_time_signals } = data;
-
   // Mock additional metrics - in real implementation, these would come from API
   const mockMetrics = {
     total_oi: 12500000,
     total_volume: 850000,
-    vwap: current_market.vwap,
-    price_change: current_market.change,
+    vwap: data.vwap || 0,
+    price_change: data.change,
     volatility: 18.5,
     market_sentiment: 'Bullish',
     participation_score: 75
@@ -42,8 +40,8 @@ export default function MarketMetrics({ data }: MarketMetricsProps) {
         minimumFractionDigits: 2,
         maximumFractionDigits: 2,
       }),
-      change: ((current_market.spot_price - mockMetrics.vwap) / mockMetrics.vwap * 100).toFixed(2) + '%',
-      changeType: current_market.spot_price > mockMetrics.vwap ? 'positive' as const : 'negative' as const,
+      change: ((data.spot_price - mockMetrics.vwap) / mockMetrics.vwap * 100).toFixed(2) + '%',
+      changeType: data.spot_price > mockMetrics.vwap ? 'positive' as const : 'negative' as const,
       icon: <TrendingUp className="w-5 h-5" />,
       color: 'text-warning-500'
     },
@@ -115,9 +113,9 @@ export default function MarketMetrics({ data }: MarketMetricsProps) {
           <div className="flex justify-between text-sm">
             <span className="text-muted-foreground">Price vs VWAP</span>
             <span className={`font-medium ${
-              current_market.spot_price > mockMetrics.vwap ? 'text-success-500' : 'text-danger-500'
+              data.spot_price > mockMetrics.vwap ? 'text-success-500' : 'text-danger-500'
             }`}>
-              {current_market.spot_price > mockMetrics.vwap ? 'Above' : 'Below'}
+              {data.spot_price > mockMetrics.vwap ? 'Above' : 'Below'}
             </span>
           </div>
         </div>
@@ -128,40 +126,22 @@ export default function MarketMetrics({ data }: MarketMetricsProps) {
         <h4 className="text-sm font-medium text-muted-foreground">Signal Strength</h4>
         
         <div className="space-y-2">
-          <div>
-            <div className="flex justify-between text-sm mb-1">
-              <span className="text-muted-foreground">Bias Signal</span>
-              <span className="font-medium">{real_time_signals.bias_signal.strength}</span>
-            </div>
-            <div className="w-full bg-muted rounded-full h-2">
-              <div
-                className={`h-2 rounded-full ${
-                  real_time_signals.bias_signal.strength === 'STRONG' 
-                    ? 'bg-success-500 w-4/5'
-                    : real_time_signals.bias_signal.strength === 'MODERATE'
-                    ? 'bg-warning-500 w-1/2'
-                    : 'bg-danger-500 w-1/4'
-                }`}
-              ></div>
-            </div>
+          <div className="flex justify-between text-sm mb-1">
+            <span className="text-muted-foreground">Bias Signal</span>
+            <span className="font-medium">No Data</span>
           </div>
+          <div className="w-full bg-muted rounded-full h-2">
+            <div className="h-2 rounded-full bg-gray-500 w-1/4"></div>
+          </div>
+        </div>
 
-          <div>
-            <div className="flex justify-between text-sm mb-1">
-              <span className="text-muted-foreground">Overall Signal</span>
-              <span className="font-medium">{real_time_signals.overall_signal.strength}</span>
-            </div>
-            <div className="w-full bg-muted rounded-full h-2">
-              <div
-                className={`h-2 rounded-full ${
-                  real_time_signals.overall_signal.strength === 'STRONG' 
-                    ? 'bg-success-500 w-4/5'
-                    : real_time_signals.overall_signal.strength === 'MODERATE'
-                    ? 'bg-warning-500 w-1/2'
-                    : 'bg-danger-500 w-1/4'
-                }`}
-              ></div>
-            </div>
+        <div>
+          <div className="flex justify-between text-sm mb-1">
+            <span className="text-muted-foreground">Overall Signal</span>
+            <span className="font-medium">No Data</span>
+          </div>
+          <div className="w-full bg-muted rounded-full h-2">
+            <div className="h-2 rounded-full bg-gray-500 w-1/4"></div>
           </div>
         </div>
       </div>
