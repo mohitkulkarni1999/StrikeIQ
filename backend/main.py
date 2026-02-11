@@ -156,12 +156,6 @@ async def upstox_auth_callback(code: str = Query(None)):
         
         token_data = auth_service.exchange_code_for_token(code)
         
-        # Store token in environment for now (in production, use secure storage)
-        import os
-        os.environ["UPSTOX_ACCESS_TOKEN"] = token_data["access_token"]
-        
-        logger.info("Upstox authentication successful")
-        
         # Redirect to frontend success page
         from fastapi.responses import RedirectResponse
         return RedirectResponse(url="http://localhost:3000/auth/success?status=success")
