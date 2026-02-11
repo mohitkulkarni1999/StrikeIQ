@@ -1,5 +1,7 @@
-from typing import Optional
+import asyncio
+import logging
 from datetime import datetime, timedelta
+from typing import Optional
 import json
 import os
 import httpx
@@ -103,6 +105,10 @@ class UpstoxAuthService:
                     token_data.get("refresh_token"),
                     token_data.get("expires_in") or 3600
                 )
+                
+                # Debug logging to see what Upstox returns
+                logger.info(f"Upstox token response: expires_in={token_data.get('expires_in')}, access_token_length={len(token_data.get('access_token', ''))}")
+                
                 self._store_credentials(credentials)
                 self._credentials = credentials
                 return credentials.access_token

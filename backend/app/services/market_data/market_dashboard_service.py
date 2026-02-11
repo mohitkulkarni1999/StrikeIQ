@@ -227,6 +227,9 @@ class MarketDashboardService:
             
             logger.info(f"Parsed data for {symbol}: spot_price={spot_price}, api_response={api_response}")
             
+            # Get actual market status based on current time
+            market_status = self._get_market_status()
+            
             return MarketData(
                 symbol=symbol,
                 spot_price=spot_price,
@@ -234,12 +237,40 @@ class MarketDashboardService:
                 change=None,         # Would calculate from previous close
                 change_percent=None,  # Would calculate from previous close
                 timestamp=datetime.now(timezone.utc),
-                market_status=MarketStatus.OPEN
+                market_status=market_status
             )
             
         except Exception as e:
             logger.error(f"Error parsing market data for {symbol}: {e}")
             raise APIResponseError(f"Failed to parse market data: {e}")
+    
+    def _get_market_status(self) -> MarketStatus:
+        """Get actual market status based on NSE trading hours"""
+        from datetime import datetime, timezone
+        
+        # Get current time in IST (UTC+5:30)
+        now_utc = datetime.now(timezone.utc)
+        now_ist = now_utc + timedelta(hours=5, minutes=30)
+        
+        # NSE trading hours: 9:15 AM - 3:30 PM IST, Monday-Friday
+        current_time = now_ist.time()
+        current_day = now_ist.weekday()  # Monday=0, Sunday=6
+        
+        # Check if it's a weekday
+        if current_day >= 5:  # Saturday (5) or Sunday (6)
+            logger.info(f"Market closed: Weekend (Day {current_day})")
+            return MarketStatus.CLOSED
+        
+        # Check if within trading hours (9:15 AM - 3:30 PM)
+        market_open = datetime.strptime("09:15", "%H:%M").time()
+        market_close = datetime.strptime("15:30", "%H:%M").time()
+        
+        if market_open <= current_time <= market_close:
+            logger.info(f"Market open: {current_time} within trading hours")
+            return MarketStatus.OPEN
+        else:
+            logger.info(f"Market closed: {current_time} outside trading hours (09:15-15:30)")
+            return MarketStatus.CLOSED
     
     def _create_market_closed_response(self, symbol: str) -> MarketData:
         """Create market closed response"""
