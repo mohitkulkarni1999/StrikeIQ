@@ -80,11 +80,33 @@ class OptionChainService:
                     if puts:
                         logger.info(f"=== INVESTIGATION: First put sample: {puts[0]} ===")
                     
+                    # Calculate OI Analytics
+                    total_call_oi = sum(call.get("oi", 0) for call in calls)
+                    total_put_oi = sum(put.get("oi", 0) for put in puts)
+                    
+                    # Calculate PCR with safe division
+                    pcr = 0 if total_call_oi == 0 else round(total_put_oi / total_call_oi, 2)
+                    
+                    # Find strongest support/resistance levels
+                    resistance_strike = max(calls, key=lambda x: x.get("oi", 0)).get("strike", 0) if calls else 0
+                    support_strike = max(puts, key=lambda x: x.get("oi", 0)).get("strike", 0) if puts else 0
+                    
+                    analytics = {
+                        "total_call_oi": total_call_oi,
+                        "total_put_oi": total_put_oi,
+                        "pcr": pcr,
+                        "strongest_resistance": resistance_strike,
+                        "strongest_support": support_strike
+                    }
+                    
+                    logger.info(f"=== INVESTIGATION: Calculated analytics - PCR: {pcr}, Support: {support_strike}, Resistance: {resistance_strike} ===")
+                    
                     result = {
                         "symbol": symbol,
                         "expiry": expiry_date,
                         "calls": calls,
                         "puts": puts,
+                        "analytics": analytics,
                         "timestamp": datetime.now(timezone.utc).isoformat()
                     }
                     

@@ -104,7 +104,14 @@ interface MarketDashboardProps {
 }
 
 function MarketDashboard({ marketData, symbol, authState }: MarketDashboardProps) {
+  const [analytics, setAnalytics] = useState<any>(null);
+  
   console.log(`🔍 MarketDashboard: Received symbol=${symbol}, marketData.symbol=${marketData?.symbol}`);
+  
+  // Callback to receive analytics from OIHeatmap
+  const handleAnalyticsUpdate = (analyticsData: any) => {
+    setAnalytics(analyticsData);
+  };
   
   // Show auth button if in AUTH mode (handle auth state here to avoid hooks issues)
   if (authState.mode === 'AUTH' && authState.loginUrl) {
@@ -274,14 +281,14 @@ function MarketDashboard({ marketData, symbol, authState }: MarketDashboardProps
         <SmartMoneyActivity signals={null} />
 
         {/* Market Metrics */}
-        <MarketMetrics data={marketData} />
+        <MarketMetrics data={marketData} analytics={analytics} />
       </div>
 
       {/* Third Row - Signal Cards */}
       <SignalCards signals={null} />
 
       {/* OI Heatmap - Full Width */}
-      <OIHeatmap symbol={symbol} />
+      <OIHeatmap symbol={symbol} onAnalyticsUpdate={handleAnalyticsUpdate} />
       <div className="text-xs text-muted-foreground mt-2">
         Debug: Dashboard component rendering with symbol={symbol}, marketData.symbol={marketData.symbol}
       </div>

@@ -3,55 +3,62 @@ import { BarChart3, TrendingUp, Users, Activity } from 'lucide-react';
 
 interface MarketMetricsProps {
   data: MarketData;
+  analytics?: {
+    total_call_oi: number;
+    total_put_oi: number;
+    pcr: number;
+    strongest_support: number;
+    strongest_resistance: number;
+  };
 }
 
-export default function MarketMetrics({ data }: MarketMetricsProps) {
-  // Mock additional metrics - in real implementation, these would come from API
-  const mockMetrics = {
-    total_oi: 12500000,
-    total_volume: 850000,
-    vwap: 0, // Mock value since MarketData doesn't have vwap
-    price_change: data.change,
-    volatility: 18.5,
-    market_sentiment: 'Bullish',
-    participation_score: 75
-  };
+export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
+  // Compute real metrics from analytics
+  const totalCallOI = analytics?.total_call_oi ?? 0;
+  const totalPutOI = analytics?.total_put_oi ?? 0;
+  const totalOI = totalCallOI + totalPutOI;
+
+  const pcr = analytics?.pcr ?? 0;
+
+  const sentiment =
+    pcr > 1.2
+      ? "Bullish"
+      : pcr < 0.8
+      ? "Bearish"
+      : "Neutral";
+
+  const biasStrength = Math.min(Math.abs(pcr - 1) * 100, 100);
+
+  // Safe VWAP calculation (no division by zero)
+  const vwapChange =
+    totalOI > 0
+      ? ((data.spot_price - totalOI) / totalOI) * 100
+      : 0;
 
   const metrics = [
     {
-      label: 'Total OI',
-      value: (mockMetrics.total_oi / 10000000).toFixed(2) + ' Cr',
-      change: '+2.5%',
-      changeType: 'positive' as const,
+      label: "Total OI",
+      value: (totalOI / 10000000).toFixed(2) + " Cr",
+      change: "PCR: " + pcr.toFixed(2),
+      changeType: pcr > 1 ? ("positive" as const) : ("negative" as const),
       icon: <BarChart3 className="w-5 h-5" />,
-      color: 'text-primary-500'
+      color: "text-primary-500"
     },
     {
-      label: 'Total Volume',
-      value: (mockMetrics.total_volume / 100000).toFixed(1) + ' L',
-      change: '+5.2%',
-      changeType: 'positive' as const,
-      icon: <Activity className="w-5 h-5" />,
-      color: 'text-success-500'
-    },
-    {
-      label: 'VWAP',
-      value: '₹' + mockMetrics.vwap.toLocaleString('en-IN', {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      }),
-      change: ((data.spot_price - mockMetrics.vwap) / mockMetrics.vwap * 100).toFixed(2) + '%',
-      changeType: data.spot_price > mockMetrics.vwap ? 'positive' as const : 'negative' as const,
+      label: "Call OI",
+      value: totalCallOI.toLocaleString("en-IN"),
+      change: "Resistance @ " + (analytics?.strongest_resistance ?? "-"),
+      changeType: "negative" as const,
       icon: <TrendingUp className="w-5 h-5" />,
-      color: 'text-warning-500'
+      color: "text-danger-500"
     },
     {
-      label: 'Participation',
-      value: mockMetrics.participation_score + '%',
-      change: '+3.1%',
-      changeType: 'positive' as const,
-      icon: <Users className="w-5 h-5" />,
-      color: 'text-info-500'
+      label: "Put OI",
+      value: totalPutOI.toLocaleString("en-IN"),
+      change: "Support @ " + (analytics?.strongest_support ?? "-"),
+      changeType: "positive" as const,
+      icon: <Activity className="w-5 h-5" />,
+      color: "text-success-500"
     }
   ];
 
@@ -95,53 +102,47 @@ export default function MarketMetrics({ data }: MarketMetricsProps) {
         <div className="flex items-center justify-between mb-3">
           <h4 className="text-sm font-medium">Market Sentiment</h4>
           <div className={`px-3 py-1 rounded-full ${
-            mockMetrics.market_sentiment === 'Bullish' 
+            sentiment === 'Bullish' 
               ? 'bg-success-500/20 text-success-500' 
-              : mockMetrics.market_sentiment === 'Bearish'
+              : sentiment === 'Bearish'
               ? 'bg-danger-500/20 text-danger-500'
               : 'bg-warning-500/20 text-warning-500'
           }`}>
-            {mockMetrics.market_sentiment}
+            {sentiment}
           </div>
         </div>
         
         <div className="space-y-2">
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Volatility</span>
-            <span className="font-medium">{mockMetrics.volatility}%</span>
+            <span className="text-muted-foreground">Put/Call Ratio</span>
+            <span className="font-medium">{pcr.toFixed(2)}</span>
           </div>
           <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Price vs VWAP</span>
+            <span className="text-muted-foreground">Bias Strength</span>
             <span className={`font-medium ${
-              data.spot_price > mockMetrics.vwap ? 'text-success-500' : 'text-danger-500'
+              pcr > 1 ? 'text-success-500' : 'text-danger-500'
             }`}>
-              {data.spot_price > mockMetrics.vwap ? 'Above' : 'Below'}
+              {biasStrength.toFixed(1)}%
             </span>
           </div>
         </div>
       </div>
 
       {/* Signal Strength */}
-      <div className="space-y-3">
-        <h4 className="text-sm font-medium text-muted-foreground">Signal Strength</h4>
-        
-        <div className="space-y-2">
-          <div className="flex justify-between text-sm mb-1">
-            <span className="text-muted-foreground">Bias Signal</span>
-            <span className="font-medium">No Data</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-2">
-            <div className="h-2 rounded-full bg-gray-500 w-1/4"></div>
-          </div>
-        </div>
-
-        <div>
-          <div className="flex justify-between text-sm mb-1">
-            <span className="text-muted-foreground">Overall Signal</span>
-            <span className="font-medium">No Data</span>
-          </div>
-          <div className="w-full bg-muted rounded-full h-2">
-            <div className="h-2 rounded-full bg-gray-500 w-1/4"></div>
+      <div className="glass-morphism rounded-lg p-4">
+        <h4 className="text-sm font-medium mb-3">Signal Strength</h4>
+        <div className="space-y-3">
+          <div>
+            <div className="flex justify-between text-sm mb-1">
+              <span className="text-muted-foreground">Market Bias</span>
+              <span className="font-medium">{sentiment}</span>
+            </div>
+            <div className="h-2 rounded-full bg-gray-500/20">
+              <div
+                className="h-2 rounded-full bg-primary-500"
+                style={{ width: `${biasStrength}%` }}
+              ></div>
+            </div>
           </div>
         </div>
       </div>

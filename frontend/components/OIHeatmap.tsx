@@ -12,23 +12,25 @@ interface OIData {
   oi: number;
   change: number;
   ltp: number;
-  put_ltp: number;
-  put_change: number;
-  put_oi: number;
+  putLtp: number;
+  putChange: number;
+  putOi: number;
   isATM?: boolean;
 }
 
 interface OIHeatmapProps {
   symbol: string;
+  onAnalyticsUpdate?: (analytics: any) => void;
 }
 
-export default function OIHeatmap({ symbol }: OIHeatmapProps) {
+export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps) {
   const [availableExpiries, setAvailableExpiries] = useState<ExpiryDate[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<string>('');
   const [expiryLoading, setExpiryLoading] = useState<boolean>(false);
   const [oiData, setOiData] = useState<OIData[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
+  const [analytics, setAnalytics] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Format expiry date for display
@@ -231,15 +233,23 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
             console.log(`✅ Got option chain data for ${symbol}`);
             const chain = response.data;
             
-            // Backend returns: {status: "success", data: {symbol, expiry, calls, puts}}
+            // Backend returns: {status: "success", data: {symbol, expiry, calls, puts, analytics}}
             const calls = chain?.data?.calls || [];
             const puts = chain?.data?.puts || [];
+            const analyticsData = chain?.data?.analytics;
             
             console.log(`📊 Got ${calls.length} calls and ${puts.length} puts`);
+            console.log("📊 Analytics data:", analyticsData);
             console.log("=== DEBUG: First 3 calls ===");
             console.table(calls?.slice(0, 3));
             console.log("=== DEBUG: First 3 puts ===");
             console.table(puts?.slice(0, 3));
+            
+            // Set analytics data
+            if (analyticsData) {
+              setAnalytics(analyticsData);
+              onAnalyticsUpdate?.(analyticsData);
+            }
             
             // Find ATM strike and transform data
             const transformedData = transformOptionChainData(calls, puts, spotPrice);
@@ -379,6 +389,42 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
           </div>
         </div>
       </div>
+
+      {/* OI Analytics */}
+      {analytics && (
+        <div className="mb-4 p-4 glass-morphism rounded-lg">
+          <h3 className="text-lg font-semibold mb-3">OI Analytics</h3>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* PCR */}
+            <div className="text-center">
+              <div className="text-sm text-muted-foreground mb-1">Put/Call Ratio</div>
+              <div className={`text-2xl font-bold ${
+                analytics.pcr > 1 ? 'text-green-500' : 
+                analytics.pcr < 1 ? 'text-red-500' : 
+                'text-gray-500'
+              }`}>
+                {analytics.pcr?.toFixed(2) || '0.00'}
+              </div>
+            </div>
+            
+            {/* Strongest Support */}
+            <div className="text-center">
+              <div className="text-sm text-muted-foreground mb-1">Strongest Support</div>
+              <div className="text-2xl font-bold text-green-500">
+                {analytics.strongest_support?.toLocaleString('en-IN') || '--'}
+              </div>
+            </div>
+            
+            {/* Strongest Resistance */}
+            <div className="text-center">
+              <div className="text-sm text-muted-foreground mb-1">Strongest Resistance</div>
+              <div className="text-2xl font-bold text-red-500">
+                {analytics.strongest_resistance?.toLocaleString('en-IN') || '--'}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Current Price Indicator */}
       <div className="mb-4 p-3 glass-morphism rounded-lg">
