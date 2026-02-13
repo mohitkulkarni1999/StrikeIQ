@@ -61,6 +61,7 @@ async def get_auth_status():
                         'session_type': 'AUTH_REQUIRED',
                         'mode': 'AUTH',
                         'message': 'Token validation failed',
+                        'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
                         'timestamp': datetime.now().isoformat()
                     }
         else:
@@ -68,6 +69,7 @@ async def get_auth_status():
                 'session_type': 'AUTH_REQUIRED',
                 'mode': 'AUTH', 
                 'message': 'No access token available',
+                'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
                 'timestamp': datetime.now().isoformat()
             }
         
@@ -84,6 +86,7 @@ async def get_auth_status():
             'session_type': 'AUTH_REQUIRED',
             'mode': 'AUTH',
             'message': f'Auth check failed: {str(e)}',
+            'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
             'timestamp': datetime.now().isoformat()
         }
         
