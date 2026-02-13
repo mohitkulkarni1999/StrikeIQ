@@ -20,7 +20,7 @@ function DashboardComponent({ data }: DashboardProps) {
   // Handle auth required responses
   useEffect(() => {
     // Only call handleAuthRequired if backend returns AUTH_REQUIRED
-    if (isAuthRequired(data)) {
+    if (data && isAuthRequired(data)) {
       handleAuthRequired(data);
       
       // Stop polling
@@ -100,12 +100,12 @@ function DashboardComponent({ data }: DashboardProps) {
   }
 
   // Show auth screen if authentication required (fallback)
-  if (isAuthRequired(data)) {
+  if (data && isAuthRequired(data)) {
     return <AuthScreen authData={data} />;
   }
 
   // Show market data if authenticated
-  if (isMarketData(data)) {
+  if (data && isMarketData(data)) {
     return <MarketDashboard marketData={data} />;
   }
 

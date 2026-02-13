@@ -72,9 +72,9 @@ export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
     <div className="metric-card">
       <div className="flex items-center justify-between mb-6">
         <h3 className="text-xl font-semibold">Expected Move Analysis</h3>
-        <div className={`px-3 py-1 rounded-full border ${getSignalBgColor(signal)}`}>
-          <span className={`text-sm font-medium ${getSignalColor(signal)}`}>
-            {signal}
+        <div className={`px-3 py-1 rounded-full border ${getSignalBgColor(expected_move_signal.signal)}`}>
+          <span className={`text-sm font-medium ${getSignalColor(expected_move_signal.signal)}`}>
+            {expected_move_signal.signal}
           </span>
         </div>
       </div>
@@ -132,21 +132,21 @@ export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
       {/* Signal Analysis */}
       <div className="glass-morphism rounded-lg p-4">
         <div className="flex items-center gap-3 mb-3">
-          <div className={`p-2 rounded-lg ${getSignalBgColor(signal)}`}>
-            <div className={getSignalColor(signal)}>
-              {getSignalIcon(signal)}
+          <div className={`p-2 rounded-lg ${getSignalBgColor(expected_move_signal.signal)}`}>
+            <div className={getSignalColor(expected_move_signal.signal)}>
+              {getSignalIcon(expected_move_signal.signal)}
             </div>
           </div>
           <div>
-            <div className="font-medium">{signal}</div>
-            <div className="text-sm text-muted-foreground">Recommended: {action}</div>
+            <div className="font-medium">{expected_move_signal.signal}</div>
+            <div className="text-sm text-muted-foreground">Recommended: {expected_move_signal.action}</div>
           </div>
         </div>
         
         <div className="space-y-2 text-sm">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Distance from Range</span>
-            <span className="font-medium">{(distance * 100).toFixed(1)}%</span>
+            <span className="font-medium">{(expected_move_signal.distance * 100).toFixed(1)}%</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Range Utilization</span>
@@ -155,10 +155,10 @@ export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
           <div className="flex justify-between">
             <span className="text-muted-foreground">Breakout Risk</span>
             <span className={`font-medium ${
-              distance < 0.2 ? 'text-danger-500' : 
-              distance < 0.5 ? 'text-warning-500' : 'text-success-500'
+              expected_move_signal.distance < 0.2 ? 'text-danger-500' : 
+              expected_move_signal.distance < 0.5 ? 'text-warning-500' : 'text-success-500'
             }`}>
-              {distance < 0.2 ? 'High' : distance < 0.5 ? 'Medium' : 'Low'}
+              {expected_move_signal.distance < 0.2 ? 'High' : expected_move_signal.distance < 0.5 ? 'Medium' : 'Low'}
             </span>
           </div>
         </div>

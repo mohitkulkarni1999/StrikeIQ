@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import axios from 'axios';
 
 interface ExpiryDate {
@@ -15,6 +15,7 @@ interface OIData {
   put_ltp: number;
   put_change: number;
   put_oi: number;
+  isATM?: boolean;
 }
 
 interface OIHeatmapProps {
@@ -56,6 +57,26 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
         month: 'short', 
         year: '2-digit' 
       });
+    }
+  };
+
+  // Fetch spot price from dashboard API
+  const fetchSpotPrice = async () => {
+    try {
+      console.log("=== DEBUG: Fetching spot price from dashboard API ===");
+      const response = await axios.get(`http://localhost:8000/api/dashboard/${symbol}`);
+      console.log("=== DEBUG: Dashboard response:", response.data);
+      
+      // Extract spot price from dashboard response
+      const dashboardData = response.data;
+      const price = dashboardData?.data?.spot_price || dashboardData?.spot_price || null;
+      
+      console.log("=== DEBUG: Extracted spot price:", price);
+      setSpotPrice(price);
+      
+    } catch (err: any) {
+      console.error("=== DEBUG: Error fetching spot price:", err);
+      // Don't set error for spot price failure, just log it
     }
   };
 
@@ -122,7 +143,33 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
   // Fetch expiries on component mount
   useEffect(() => {
     fetchAvailableExpiries();
+    fetchSpotPrice(); // Fetch spot price
   }, [symbol]);
+
+  // Fetch spot price when symbol changes
+  useEffect(() => {
+    if (symbol) {
+      fetchSpotPrice();
+    }
+  }, [symbol]);
+
+  // Find closest strike to spot price
+  const closestStrike = useMemo(() => {
+    if (!spotPrice || oiData.length === 0) return null;
+    
+    let closest = null;
+    let closestDistance = Infinity;
+    
+    oiData.forEach((row) => {
+      const distance = Math.abs(row.strike - spotPrice);
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closest = row.strike;
+      }
+    });
+    
+    return closest;
+  }, [spotPrice, oiData]);
 
   // Fetch option chain data
   useEffect(() => {
@@ -146,7 +193,6 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
           // Backend returns: {status: "success", data: {symbol, expiry, calls, puts}}
           const calls = chain?.data?.calls || [];
           const puts = chain?.data?.puts || [];
-          
           console.log("=== DEBUG: First 3 calls ===");
           console.table(calls?.slice(0, 3));
           console.log("=== DEBUG: First 3 puts ===");
@@ -170,9 +216,52 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
               put_change: matchingPut?.change || 0,
               put_oi: matchingPut?.oi || 0,
             };
-          });
+          }).sort((a, b) => a.strike - b.strike); // Sort by strike value (ascending)
         
-          setOiData(transformedData);
+          // Reorder to put ATM strike in the middle of visible area
+          if (spotPrice && transformedData.length > 0) {
+            // Sort by strike value (ascending)
+            const sortedData = transformedData.sort((a, b) => a.strike - b.strike);
+            
+            // Find the exact ATM strike (closest to spot price)
+            const atmStrike = sortedData.reduce((closest, current) => {
+              const currentDist = Math.abs(current.strike - spotPrice);
+              const closestDist = Math.abs(closest.strike - spotPrice);
+              return currentDist < closestDist ? current : closest;
+            });
+            
+            // Calculate display window to center ATM strike
+            const totalRows = sortedData.length;
+            const visibleRows = 11; // Show 11 rows (5 above + ATM + 5 below)
+            const halfRows = Math.floor(visibleRows / 2);
+            
+            // Find ATM index
+            const atmIndex = sortedData.findIndex(row => row.strike === atmStrike.strike);
+            
+            // Calculate start index to center ATM strike
+            let startIndex = Math.max(0, atmIndex - halfRows);
+            let endIndex = Math.min(totalRows, startIndex + visibleRows);
+            
+            // Adjust if we're at the end to always show visibleRows
+            if (endIndex - startIndex < visibleRows && totalRows >= visibleRows) {
+              startIndex = Math.max(0, totalRows - visibleRows);
+              endIndex = totalRows;
+            }
+            
+            const displayData = sortedData.slice(startIndex, endIndex);
+            
+            // Mark the ATM strike
+            const markedData = displayData.map(row => ({
+              ...row,
+              isATM: row.strike === atmStrike.strike
+            }));
+            
+            console.log(`=== DEBUG: ATM Strike: ${atmStrike.strike}, Position: ${atmIndex}, Display: ${startIndex}-${endIndex}`);
+            
+            setOiData(markedData);
+          } else {
+            setOiData(transformedData);
+          }
         
         } catch (err: any) {
           console.error("AXIOS ERROR FULL:", err);
@@ -215,6 +304,16 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
     );
   }
 
+  // Debug logs before rendering
+  console.log("=== DEBUG: About to render oiData with", oiData?.length, "rows");
+  console.log("=== DEBUG: Current spot price:", spotPrice);
+  console.log("=== DEBUG: Closest strike to spot price:", closestStrike);
+  oiData.forEach((row, index) => {
+    if (index < 3) {
+      console.log(`=== DEBUG: Row ${index} strike=${row.strike} oi=${row.oi} ltp=${row.ltp} spotMatch=${row.strike === spotPrice}`);
+    }
+  });
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -230,7 +329,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
               onChange={(e) => setSelectedExpiry('')}
               className="glass-morphism px-4 py-2 rounded-lg border border-white/10 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
             >
-              <option value="NIFTY" selected="">NIFTY</option>
+              <option value="NIFTY">NIFTY</option>
               <option value="BANKNIFTY">BANKNIFTY</option>
             </select>
             <div className="flex items-center gap-2">
@@ -292,42 +391,46 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
       </div>
 
       {/* OI Heatmap Table */}
-      <div className="overflow-x-auto overflow-y-auto max-h-96">
+      <div className="overflow-x-auto overflow-y-auto h-[500px] border border-white/10 rounded-lg shadow-lg">
         <table className="w-full">
           <thead>
-            <tr className="text-left text-sm text-muted-foreground border-b border-white/10">
-              <th className="pb-3">Strike</th>
-              <th className="pb-3 text-center">Call OI</th>
-              <th className="pb-3 text-center">Call Chg</th>
-              <th className="pb-3 text-center">Call LTP</th>
-              <th className="pb-3 text-center">Put LTP</th>
-              <th className="pb-3 text-center">Put Chg</th>
-              <th className="pb-3 text-center">Put OI</th>
+            <tr className="text-left text-sm text-muted-foreground border-b border-white/20 bg-muted/50 sticky top-0 z-10">
+              <th className="pb-4 px-4">Strike</th>
+              <th className="pb-4 px-4 text-center">Call OI</th>
+              <th className="pb-4 px-4 text-center">Call Chg</th>
+              <th className="pb-4 px-4 text-center">Call LTP</th>
+              <th className="pb-4 px-4 text-center">Put LTP</th>
+              <th className="pb-4 px-4 text-center">Put Chg</th>
+              <th className="pb-4 px-4 text-center">Put OI</th>
             </tr>
           </thead>
           <tbody>
-            {console.log("=== DEBUG: About to render oiData with", oiData?.length, "rows")}
             {oiData.map((row, index) => {
-              if (index < 3) {
-                console.log(`=== DEBUG: Row ${index} strike=${row.strike} oi=${row.oi} ltp=${row.ltp}`);
-              }
+              const isATM = row.isATM || false;
+              
               return (
                 <tr 
                   key={row.strike} 
+                  data-strike={row.strike}
                   className={`border-b border-white/5 hover:bg-white/5 transition-colors ${
-                    row.strike === spotPrice ? 'bg-primary-500/10' : ''
+                    isATM ? 'bg-green-500/20 border-green-500/50 shadow-lg shadow-green-500/20' : ''
                   }`}
                 >
-                  <td className={`py-3 font-medium ${
-                    row.strike === spotPrice ? 'text-primary-500' : ''
+                  <td className={`py-4 px-4 font-bold text-sm ${
+                    isATM ? 'text-green-500 border-l-4 border-l-green-500' : ''
                   }`}>
-                    {row.strike.toLocaleString('en-IN')}
+                    <div className="flex items-center justify-between">
+                      <span>{row.strike.toLocaleString('en-IN')}</span>
+                      {isATM && (
+                        <span className="text-xs bg-green-500 text-white px-2 py-1 rounded-full">ATM</span>
+                      )}
+                    </div>
                   </td>
                   
                   {/* Call OI with heatmap */}
-                  <td className="py-3 text-center">
+                  <td className="py-4 px-4 text-center">
                     <div 
-                      className="px-2 py-1 rounded text-xs font-medium text-white oi-heatmap-cell"
+                      className="px-3 py-2 rounded text-sm font-medium text-white oi-heatmap-cell"
                       style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
                     >
                       {row.oi.toLocaleString('en-IN')}
@@ -335,8 +438,8 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   </td>
                   
                   {/* Call Change */}
-                  <td className="py-3 text-center">
-                    <div className={`px-2 py-1 rounded text-xs font-medium ${
+                  <td className="py-4 px-4 text-center">
+                    <div className={`px-3 py-2 rounded text-sm font-medium ${
                       row.change > 0 ? 'bg-success-500/20 text-success-500' :
                       row.change < 0 ? 'bg-danger-500/20 text-danger-500' :
                       'bg-gray-500/20 text-gray-300'
@@ -346,7 +449,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   </td>
                   
                   {/* Call LTP */}
-                  <td className="py-3 text-center text-sm">
+                  <td className="py-4 px-4 text-center text-sm font-medium">
                     {row.ltp?.toLocaleString('en-IN', {
                       style: 'currency',
                       currency: 'INR'
@@ -354,7 +457,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   </td>
                   
                   {/* Put LTP */}
-                  <td className="py-3 text-center text-sm">
+                  <td className="py-4 px-4 text-center text-sm font-medium">
                     {row.put_ltp?.toLocaleString('en-IN', {
                       style: 'currency',
                       currency: 'INR'
@@ -362,8 +465,8 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   </td>
                   
                   {/* Put Change */}
-                  <td className="py-3 text-center">
-                    <div className={`px-2 py-1 rounded text-xs font-medium ${
+                  <td className="py-4 px-4 text-center">
+                    <div className={`px-3 py-2 rounded text-sm font-medium ${
                       row.put_change > 0 ? 'bg-success-500/20 text-success-500' :
                       row.put_change < 0 ? 'bg-danger-500/20 text-danger-500' :
                       'bg-gray-500/20 text-gray-300'
@@ -373,9 +476,9 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   </td>
                   
                   {/* Put OI with heatmap */}
-                  <td className="py-3 text-center">
+                  <td className="py-4 px-4 text-center">
                     <div 
-                      className="px-2 py-1 rounded text-xs font-medium text-white oi-heatmap-cell"
+                      className="px-3 py-2 rounded text-sm font-medium text-white oi-heatmap-cell"
                       style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
                     >
                       {row.put_oi?.toLocaleString('en-IN')}

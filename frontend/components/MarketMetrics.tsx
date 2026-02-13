@@ -10,7 +10,7 @@ export default function MarketMetrics({ data }: MarketMetricsProps) {
   const mockMetrics = {
     total_oi: 12500000,
     total_volume: 850000,
-    vwap: data.vwap || 0,
+    vwap: 0, // Mock value since MarketData doesn't have vwap
     price_change: data.change,
     volatility: 18.5,
     market_sentiment: 'Bullish',

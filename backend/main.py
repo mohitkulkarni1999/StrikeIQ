@@ -129,12 +129,6 @@ async def get_dashboard_data(symbol: str, db: Depends = Depends(get_db)):
         logger.error(f"Error in dashboard endpoint for {symbol}: {str(e)}")
         raise HTTPException(status_code=500, detail="Internal server error")
 
-# Legacy endpoint for backward compatibility
-@app.get("/api/dashboard/{symbol}")
-async def get_dashboard_data_legacy(symbol: str, db: Depends = Depends(get_db)):
-    """Legacy dashboard endpoint - redirects to v1"""
-    return await get_dashboard_data(symbol, db)
-
 
 @app.get("/api/v1/market-data/{symbol}")
 async def get_market_data(symbol: str):
