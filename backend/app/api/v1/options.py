@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List, Optional
 from ...services.market_data.option_chain_service import OptionChainService
+from ...services.market_data.upstox_client import APIResponseError
 from ...services.market_data.smart_money_engine import SmartMoneyEngine
 from ...services.market_data.smart_money_engine_v2 import SmartMoneyEngineV2
 from ...services.market_data.performance_tracking_service import PerformanceTrackingService
@@ -15,7 +16,19 @@ logger = logging.getLogger(__name__)
 
 def get_option_chain_service():
     """Dependency injection for OptionChainService"""
-    return OptionChainService()
+    logger.info("=== INVESTIGATION: Creating OptionChainService ===")
+    try:
+        from app.services.upstox_auth_service import UpstoxAuthService
+        auth_service = UpstoxAuthService()
+        logger.info(f"=== INVESTIGATION: Created auth_service: {auth_service} (type: {type(auth_service)}) ===")
+        service = OptionChainService(auth_service)
+        logger.info(f"=== INVESTIGATION: Created service: {service} (type: {type(service)}) ===")
+        return service
+    except Exception as e:
+        logger.error(f"=== INVESTIGATION: Error creating service: {e} ===")
+        import traceback
+        logger.error(f"=== INVESTIGATION: Traceback: {traceback.format_exc()} ===")
+        raise
 
 def get_smart_money_engine():
     """Dependency injection for SmartMoneyEngine"""
@@ -29,6 +42,12 @@ def get_performance_tracking_service():
     """Dependency injection for PerformanceTrackingService"""
     return PerformanceTrackingService()
 
+@router.get("/test/{symbol}")
+async def test_route(symbol: str):
+    """Test route to isolate the error"""
+    logger.info(f"=== INVESTIGATION: Test route called with symbol={symbol} (type: {type(symbol)}) ===")
+    return {"status": "success", "symbol": symbol, "type": str(type(symbol))}
+
 @router.get("/contract/{symbol}", response_model=Dict[str, Any])
 async def get_option_contracts(
     symbol: str,
@@ -36,8 +55,12 @@ async def get_option_contracts(
     db: Session = Depends(get_db)
 ):
     """Get available option contracts/expiries for a symbol"""
+    logger.info(f"=== INVESTIGATION: Function called with symbol={symbol} (type: {type(symbol)}) ===")
+    logger.info(f"=== INVESTIGATION: Service={service} (type: {type(service)}) ===")
+    logger.info(f"=== INVESTIGATION: DB={db} (type: {type(db)}) ===")
+    
     try:
-        logger.info(f"API request: Option contracts for {symbol}")
+        logger.info(f"=== INVESTIGATION: API request: Option contracts for {symbol} ===")
         
         # Validate symbol
         if symbol.upper() not in ["NIFTY", "BANKNIFTY"]:
@@ -51,47 +74,113 @@ async def get_option_contracts(
         if not token:
             raise HTTPException(status_code=401, detail="No access token available")
         
-        # Get instrument key
-        instrument_key = await service._get_instrument_key(symbol)
-        
-        # Fetch available expiry dates using the correct method
+        # Get instrument key for options (NSE_FO namespace)
         try:
-            # Get all expiries from Upstox
-            nearest_expiry = await service._get_nearest_expiry(symbol, token)
-            
-            # Get all stored expiries for the dropdown
-            all_expiries = service._all_expiries.get(symbol, [nearest_expiry])
-            
-            # DEBUG: Log what we're returning to frontend
-            logger.info(f"Returning expiries to frontend for {symbol}: {all_expiries}")
-            
-            # If no expiries found, return a fallback
-            if not all_expiries or len(all_expiries) == 0:
-                logger.warning(f"No expiries found for {symbol}, using fallback")
-                all_expiries = [nearest_expiry] if nearest_expiry else []
-            
-            return {
-                "status": "success",
-                "data": all_expiries,
-                "symbol": symbol.upper(),
-                "timestamp": datetime.now().isoformat(),
-                "total_expiries": len(all_expiries)
-            }
+            logger.info(f"=== INVESTIGATION: Service object: {service} (type: {type(service)}) ===")
+            logger.info(f"=== INVESTIGATION: Symbol: {symbol} (type: {type(symbol)}) ===")
+            instrument_key = await service._get_instrument_key(symbol)
+            logger.info(f"=== INVESTIGATION: Using instrument_key: {instrument_key} (type: {type(instrument_key)}) ===")
+        except APIResponseError as e:
+            logger.error(f"=== INVESTIGATION: APIResponseError getting instrument key: {e} ===")
+            raise HTTPException(status_code=500, detail=f"API error: {e}")
         except Exception as e:
-            logger.error(f"Error fetching expiry dates: {e}")
-            # Return a proper error response instead of 500
-            return {
-                "status": "error",
-                "error": "Failed to fetch expiry dates",
-                "detail": str(e),
-                "data": [],
-                "total_expiries": 0
-            }
+            logger.error(f"=== INVESTIGATION: Error getting instrument key: {e} ===")
+            import traceback
+            logger.error(f"=== INVESTIGATION: Traceback: {traceback.format_exc()} ===")
+            raise HTTPException(status_code=500, detail=f"Failed to get instrument key: {e}")
+        
+        # Fetch option contracts using Upstox client directly
+        try:
+            # Use the exact same format as the working curl
+            import urllib.parse
             
+            # Manually construct the URL with proper encoding
+            encoded_key = urllib.parse.quote(instrument_key, safe='')
+            url = f"https://api.upstox.com/v2/option/contract?instrument_key={encoded_key}"
+            
+            logger.info(f"=== INVESTIGATION: Original key: {instrument_key} ===")
+            logger.info(f"=== INVESTIGATION: Encoded key: {encoded_key} ===")
+            logger.info(f"=== INVESTIGATION: Full URL: {url} ===")
+            
+            # Make request without params (already in URL)
+            response = await service.client._make_request(
+                'get',
+                url,
+                access_token=token
+            )
+            
+            logger.info(f"=== INVESTIGATION: Response status: {response.status_code} ===")
+            
+        except Exception as e:
+            logger.error(f"=== INVESTIGATION: Error making request: {e} ===")
+            raise HTTPException(status_code=500, detail=f"Failed to make request: {e}")
+        
+        logger.info(f"=== INVESTIGATION: Contracts HTTP Status: {response.status_code} ===")
+        
+        if response.status_code == 401:
+            raise HTTPException(status_code=401, detail="Access token expired")
+        elif response.status_code != 200:
+            logger.error(f"Failed to fetch option contracts: {response.status_code} - {response.text}")
+            raise HTTPException(status_code=500, detail=f"Failed to fetch option contracts: {response.text}")
+        
+        try:
+            data = response.json()
+            logger.info(f"=== INVESTIGATION: Contracts data type: {type(data)} ===")
+            logger.info(f"=== INVESTIGATION: Raw response: {str(data)[:500]} ===")  # Limit to first 500 chars
+            
+            # Handle different response formats
+            if isinstance(data, dict) and "data" in data:
+                contracts = data["data"]
+            elif isinstance(data, list):
+                contracts = data
+            elif isinstance(data, dict) and "status" in data and data.get("status") == "error":
+                # Handle error response
+                logger.error(f"=== INVESTIGATION: API returned error: {data} ===")
+                contracts = []
+            else:
+                logger.error(f"=== INVESTIGATION: Unexpected response format: {type(data)} - {str(data)[:200]} ===")
+                contracts = []
+            
+            logger.info(f"=== INVESTIGATION: Contracts type: {type(contracts)}, length: {len(contracts) if isinstance(contracts, list) else 'Not a list'} ===")
+            
+        except Exception as e:
+            logger.error(f"=== INVESTIGATION: Error parsing JSON: {e} ===")
+            raise HTTPException(status_code=500, detail=f"Failed to parse response: {e}")
+        
+        # Extract unique expiry dates from real contracts
+        expiries_set = set()
+        try:
+            if isinstance(contracts, list):
+                for contract in contracts:
+                    if isinstance(contract, dict):
+                        expiry = contract.get('expiry')
+                        if expiry:
+                            expiries_set.add(expiry)
+            else:
+                logger.error(f"=== INVESTIGATION: Contracts is not a list: {type(contracts)} ===")
+        except Exception as e:
+            logger.error(f"=== INVESTIGATION: Error extracting expiries: {e} ===")
+            logger.error(f"=== INVESTIGATION: Contracts data: {contracts} ===")
+        
+        # Convert to sorted list
+        expiries = sorted(list(expiries_set))
+        logger.info(f"=== INVESTIGATION: Extracted {len(expiries)} unique expiries: {expiries} ===")
+        
+        return {
+            "status": "success",
+            "data": expiries,
+            "symbol": symbol.upper(),
+            "timestamp": datetime.now().isoformat(),
+            "total_expiries": len(expiries)
+        }
+        
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Error in option contracts API: {e}")
+        logger.error(f"=== INVESTIGATION: Unexpected error fetching option contracts for {symbol}: {e}")
+        logger.error(f"=== INVESTIGATION: Error type: {type(e)} ===")
+        import traceback
+        logger.error(f"=== INVESTIGATION: Traceback: {traceback.format_exc()} ===")
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/chain/{symbol}", response_model=Dict[str, Any])
@@ -114,10 +203,15 @@ async def get_option_chain(
             raise HTTPException(status_code=400, detail="Expiry date is required")
         
         # Get option chain data
+        logger.info(f"=== INVESTIGATION: About to call service.get_option_chain ===")
         chain_data = await service.get_option_chain(symbol, expiry_date)
+        logger.info(f"=== INVESTIGATION: Service returned: {type(chain_data)} ===")
+        logger.info(f"=== INVESTIGATION: Service response: {str(chain_data)[:200]} ===")
         
-        if "error" in chain_data:
-            raise HTTPException(status_code=500, detail=chain_data["error"])
+        # Check if service returned an error response
+        if isinstance(chain_data, dict) and "status" in chain_data and chain_data["status"] == "error":
+            logger.error(f"=== INVESTIGATION: Service returned error: {chain_data} ===")
+            raise HTTPException(status_code=500, detail=chain_data.get("error", "Unknown error"))
         
         # Add total_strikes and log final response
         chain_data["total_strikes"] = len(chain_data.get("calls", []))

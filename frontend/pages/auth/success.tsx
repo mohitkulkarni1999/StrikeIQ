@@ -17,12 +17,15 @@ export default function AuthSuccess() {
     
     // If auth successful, trigger auth context refresh and redirect
     if (authStatus === 'success') {
-      // Trigger auth context to re-check authentication
-      setTimeout(() => {
-        checkAuth().then(() => {
+      console.log('OAuth success detected, triggering auth refresh and redirect')
+      
+      // Trigger auth context refresh immediately
+      checkAuth().then(() => {
+        // Redirect to dashboard after short delay
+        setTimeout(() => {
           router.push('/')
-        })
-      }, 1000)
+        }, 500)
+      })
     }
   }, [router, checkAuth])
 

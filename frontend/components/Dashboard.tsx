@@ -19,7 +19,8 @@ function DashboardComponent({ data }: DashboardProps) {
 
   // Handle auth required responses
   useEffect(() => {
-    if (data && isAuthRequired(data)) {
+    // Only call handleAuthRequired if backend returns AUTH_REQUIRED
+    if (isAuthRequired(data)) {
       handleAuthRequired(data);
       
       // Stop polling
@@ -30,24 +31,44 @@ function DashboardComponent({ data }: DashboardProps) {
     }
   }, [data, handleAuthRequired, pollingInterval]);
 
+  // Show auth button if in AUTH mode
+  if (authState.mode === 'AUTH' && authState.loginUrl) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="max-w-md w-full mx-4">
+          <div className="glass-morphism rounded-2xl p-8 text-center">
+            <div className="w-20 h-20 bg-orange-500 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            
+            <h1 className="text-3xl font-bold text-white mb-2">Authentication Required</h1>
+            <p className="text-gray-300 mb-8">Please authenticate to access market data</p>
+            
+            <button
+              onClick={() => window.location.href = authState.loginUrl}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-orange-500/25"
+            >
+              Authenticate to Upstox
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Setup polling for authenticated state
   useEffect(() => {
-    if (authState.isAuthenticated && !pollingInterval) {
-      const interval = setInterval(() => {
-        // Trigger data refresh - this would be handled by parent component
-        window.dispatchEvent(new CustomEvent('refreshData'));
-      }, 5000); // Poll every 5 seconds
-      
-      setPollingInterval(interval);
-    }
-
-    // Cleanup on unmount or auth state change
-    return () => {
-      if (pollingInterval) {
-        clearInterval(pollingInterval);
-      }
-    };
-  }, [authState.isAuthenticated, pollingInterval]);
+    if (!authState.isAuthenticated) return;
+    
+    const interval = setInterval(() => {
+      // Trigger data refresh - this would be handled by parent component
+      window.dispatchEvent(new CustomEvent('refreshData'));
+    }, 60000); // Poll every 60 seconds
+    
+    return () => clearInterval(interval);
+  }, []); // Empty dependencies - only run once
 
   // Stop polling listener
   useEffect(() => {
@@ -78,7 +99,7 @@ function DashboardComponent({ data }: DashboardProps) {
     );
   }
 
-  // Show auth screen if authentication required
+  // Show auth screen if authentication required (fallback)
   if (isAuthRequired(data)) {
     return <AuthScreen authData={data} />;
   }

@@ -11,14 +11,20 @@ export default function OAuthHandler({ onAuthSuccess }: OAuthHandlerProps) {
     const authStatus = urlParams.get('status');
     
     if (authStatus === 'success' && window.location.pathname.includes('/auth/success')) {
-      console.log('OAuth success detected, triggering auth refresh');
-      // Clean up any stored auth URL
+      console.log('OAuth success detected, triggering auth refresh immediately');
+      
+      // SECURITY: No state validation needed - backend handles it
+      // Clean up any stored data
+      sessionStorage.removeItem('oauth_state');
       sessionStorage.removeItem('upstox_auth_url');
       
-      // Trigger auth success callback
+      // Trigger auth success callback immediately
+      onAuthSuccess();
+      
+      // Then redirect to dashboard after a short delay
       setTimeout(() => {
-        onAuthSuccess();
-      }, 100);
+        window.location.href = '/';
+      }, 500);
     }
   }, [onAuthSuccess]);
 

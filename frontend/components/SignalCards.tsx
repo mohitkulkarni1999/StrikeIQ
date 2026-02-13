@@ -16,7 +16,12 @@ export default function SignalCards({ signals }: SignalCardsProps) {
     );
   }
 
-  const { bias_signal, expected_move_signal, smart_money_signal, overall_signal } = signals;
+  const { bias_signal, expected_move_signal, smart_money_signal, overall_signal } = signals || {
+    bias_signal: { action: 'HOLD', strength: 'WEAK', confidence: 0 },
+    expected_move_signal: { signal: 'NEUTRAL', action: 'HOLD', distance: 0 },
+    smart_money_signal: { signal: 'NEUTRAL', action: 'HOLD', activities: [] },
+    overall_signal: { action: 'HOLD', strength: 'WEAK', confidence: 0, reasoning: 'No signals available' }
+  };
 
   const signalCards = [
     {

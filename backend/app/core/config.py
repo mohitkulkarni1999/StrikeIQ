@@ -24,6 +24,11 @@ class Settings:
     DATABASE_URL: str = os.getenv('DATABASE_URL', "postgresql://strikeiq:strikeiq123@localhost:5432/strikeiq")
     REDIS_URL: str = os.getenv('REDIS_URL', "redis://localhost:6379")
     
+    # Redis Settings
+    REDIS_HOST: str = os.getenv('REDIS_HOST', 'localhost')
+    REDIS_PORT: int = int(os.getenv('REDIS_PORT', '6379'))
+    REDIS_DB: int = int(os.getenv('REDIS_DB', '0'))
+    
     def __init__(self):
         # Additional initialization if needed, but class attributes cover defaults
         pass

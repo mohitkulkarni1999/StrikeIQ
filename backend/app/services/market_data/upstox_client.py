@@ -5,11 +5,19 @@ import logging
 import json
 import time
 from typing import Dict, Any, Optional, List
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from ...core.config import settings
 from .types import InstrumentInfo, APIResponseError, AuthenticationError, TokenExpiredError
 
 logger = logging.getLogger(__name__)
+
+# Redis imports for caching
+try:
+    import redis
+    REDIS_AVAILABLE = True
+except ImportError:
+    REDIS_AVAILABLE = False
+    logger.warning("Redis not available, using in-memory caching")
 
 class UpstoxClient:
     """Production-grade API client with centralized rate limiting"""
@@ -27,38 +35,136 @@ class UpstoxClient:
     def __init__(self):
         if getattr(self, "_initialized", False):
             return
-
+        
         self.base_url_v2 = "https://api.upstox.com/v2"
         self.base_url_v3 = "https://api.upstox.com/v3"
-
-        self._client: Optional[httpx.AsyncClient] = None
-
-        # Rate limiting
-        self._rate_limit = asyncio.Semaphore(3)
-        self._last_request_time: float = 0.0
-        self._min_delay: float = 0.25
-        self._backoff_multiplier: float = 1.0
-
-        # Caching (if used)
-        self._dashboard_cache = {}
-        self._dashboard_cache_time = {}
-        self._dashboard_ttl = 60
-
+        self._client = None
+        self._cache = {}
+        
+        # Rate limiting controls
+        self._rate_limit = asyncio.Semaphore(5)  # Max 5 concurrent requests
+        self._last_request_time = 0.0
+        self._min_delay = 0.25  # 250ms between requests
+        self._backoff_multiplier = 1.0  # Exponential backoff
+        
+        # Initialize Redis cache if available
+        if REDIS_AVAILABLE:
+            try:
+                self._redis_client = redis.Redis(
+                    host=settings.REDIS_HOST,
+                    port=settings.REDIS_PORT,
+                    db=settings.REDIS_DB,
+                    decode_responses=True
+                )
+                logger.info("Redis cache initialized")
+            except Exception as e:
+                logger.error(f"Redis initialization failed: {e}")
+                self._redis_client = None
+        else:
+            self._redis_client = None
+        
+        # In-memory cache fallback
+        self._memory_cache = {}
+        self._cache_timestamps = {}
+        
+        # Cache TTL settings
+        self._expiry_cache_ttl = 3600  # 1 hour for expiries
+        self._contracts_cache_ttl = 1800  # 30 minutes for contracts
+        
         self._initialized = True
+    
+    def _get_cache_key(self, symbol: str, data_type: str) -> str:
+        """Generate cache key"""
+        return f"upstox:{data_type}:{symbol.lower()}"
     
     def _is_cache_valid(self, cache_key: str) -> bool:
         """Check if cache is still valid"""
-        if cache_key not in self._dashboard_cache:
+        if cache_key not in self._cache_timestamps:
             return False
         
-        cache_time = self._dashboard_cache_time[cache_key]
-        return (time.time() - cache_time) < self._dashboard_ttl
+        cache_time = self._cache_timestamps[cache_key]
+        ttl = self._expiry_cache_ttl if 'expiry' in cache_key else self._contracts_cache_ttl
+        return (time.time() - cache_time) < ttl
     
-    def _get_cached_data(self, cache_key: str) -> Any:
-        """Get cached data if valid"""
-        if self._is_cache_valid(cache_key):
-            return self._dashboard_cache[cache_key]
-        return None
+    def _set_cache(self, cache_key: str, data: Any, ttl: int = None) -> None:
+        """Set cache data"""
+        try:
+            # Use Redis if available
+            if self._redis_client:
+                if ttl:
+                    self._redis_client.setex(cache_key, ttl, json.dumps(data))
+                else:
+                    self._redis_client.set(cache_key, json.dumps(data))
+                logger.debug(f"Cached to Redis: {cache_key}")
+            else:
+                # Fallback to memory cache
+                self._memory_cache[cache_key] = data
+                logger.debug(f"Cached to memory: {cache_key}")
+            
+            # Set timestamp
+            self._cache_timestamps[cache_key] = time.time()
+            
+        except Exception as e:
+            logger.error(f"Cache set error: {e}")
+    
+    def _get_cache(self, cache_key: str) -> Optional[Any]:
+        """Get cache data"""
+        try:
+            # Use Redis if available
+            if self._redis_client:
+                data = self._redis_client.get(cache_key)
+                if data:
+                    logger.debug(f"Cache hit from Redis: {cache_key}")
+                    return json.loads(data)
+                else:
+                    logger.debug(f"Cache miss from Redis: {cache_key}")
+                    return None
+            else:
+                # Fallback to memory cache
+                if cache_key in self._memory_cache:
+                    logger.debug(f"Cache hit from memory: {cache_key}")
+                    return self._memory_cache[cache_key]
+                else:
+                    logger.debug(f"Cache miss from memory: {cache_key}")
+                    return None
+            
+        except Exception as e:
+            logger.error(f"Cache get error: {e}")
+            return None
+    
+    def _is_cache_valid(self, cache_key: str) -> bool:
+        """Check if cache is still valid"""
+        if cache_key not in self._cache_timestamps:
+            return False
+        
+        cache_time = self._cache_timestamps[cache_key]
+        ttl = self._expiry_cache_ttl if 'expiry' in cache_key else self._contracts_cache_ttl
+        return (time.time() - cache_time) < ttl
+    
+    def _get_cache(self, cache_key: str) -> Optional[Any]:
+        """Get cache data"""
+        try:
+            # Use Redis if available
+            if self._redis_client:
+                data = self._redis_client.get(cache_key)
+                if data:
+                    logger.debug(f"Cache hit from Redis: {cache_key}")
+                    return json.loads(data)
+                else:
+                    logger.debug(f"Cache miss from Redis: {cache_key}")
+                    return None
+            else:
+                # Fallback to memory cache
+                if cache_key in self._memory_cache:
+                    logger.debug(f"Cache hit from memory: {cache_key}")
+                    return self._memory_cache[cache_key]
+                else:
+                    logger.debug(f"Cache miss from memory: {cache_key}")
+                    return None
+            
+        except Exception as e:
+            logger.error(f"Cache get error: {e}")
+            return None
     
     async def _get_client(self, access_token: str, version: str = "v3") -> httpx.AsyncClient:
         """Get authenticated HTTP client"""
@@ -118,48 +224,54 @@ class UpstoxClient:
             return response
     
     async def get_option_expiries(self, access_token: str, symbol: str) -> List[str]:
-        """Get available expiry dates for a symbol - WORKING API METHOD"""
+        """Get available expiry dates for symbol - WITH CACHING"""
+        cache_key = self._get_cache_key(symbol, "expiry")
+        
+        # Check cache first
+        cached_expiries = self._get_cache(cache_key)
+        if cached_expiries and self._is_cache_valid(cache_key):
+            logger.info(f"Cache hit for {symbol} expiries: {cached_expiries}")
+            return cached_expiries
+        
         try:
-            # Download NSE FO instruments JSON file (WORKING)
+            # Get instrument key first
+            instrument_key = self.INSTRUMENT_MAP.get(symbol.upper())
+            if not instrument_key:
+                raise APIResponseError(f"Unknown symbol: {symbol}")
+            
+            # Use REAL option contracts API
             response = await self._make_request(
                 'get',
-                "https://assets.upstox.com/market-instruments/instruments/nse_fo.json",
-                access_token=access_token  # May not be needed for public file
+                f"https://api.upstox.com/v2/option/contract",
+                access_token=access_token,
+                params={
+                    "instrument_key": instrument_key
+                }
             )
             
-            if response.status_code != 200:
-                raise APIResponseError(f"HTTP {response.status_code}: Failed to download instruments")
+            if response.status_code == 401:
+                raise TokenExpiredError("Access token expired")
+            elif response.status_code != 200:
+                raise APIResponseError(f"HTTP {response.status_code}: Failed to fetch option contracts")
             
             data = response.json()
-            logger.info(f"Downloaded {len(data)} NSE_FO instruments")
+            logger.info(f"Downloaded {len(data)} option contracts for {symbol}")
             
-            # Filter for symbol options and extract expiry dates
-            symbol_expiries = []
+            # Extract unique expiry dates from real contracts
+            expiries_set = set()
+            for contract in data:
+                expiry = contract.get('expiry')
+                if expiry:
+                    expiries_set.add(expiry)
             
-            for instrument in data:
-                if (symbol in instrument.get('trading_symbol', '') and 
-                    instrument.get('instrument_type', '').startswith('OPT')):
-                    expiry = instrument.get('expiry')
-                    if expiry:
-                        # Convert timestamp to date string if needed
-                        if isinstance(expiry, (int, float)):
-                            expiry_date = datetime.fromtimestamp(expiry/1000, tz=timezone.utc).strftime('%Y-%m-%d')
-                        else:
-                            expiry_date = str(expiry)
-                        
-                        if expiry_date not in symbol_expiries:
-                            symbol_expiries.append(expiry_date)
+            # Convert to sorted list
+            expiries = sorted(list(expiries_set))
             
-            # If no expiries found, return hardcoded fallbacks
-            if not symbol_expiries:
-                logger.warning("No expiries found from JSON, using fallback dates")
-                symbol_expiries = ["2026-02-26", "2026-03-05", "2026-03-12"]
+            # Cache the result
+            self._set_cache(cache_key, expiries, self._expiry_cache_ttl)
             
-            # Sort expiries
-            symbol_expiries.sort()
-            
-            logger.info(f"Available expiries for {symbol}: {symbol_expiries}")
-            return symbol_expiries
+            logger.info(f"Real expiries for {symbol}: {expiries}")
+            return expiries
             
         except Exception as e:
             logger.error(f"Error fetching option expiries for {symbol}: {e}")
@@ -167,36 +279,34 @@ class UpstoxClient:
             from datetime import datetime, timedelta
             today = datetime.now()
             
-            # Generate realistic expiry dates based on current month
-            current_year = today.year
-            current_month = today.month
+            # Find next Thursdays (NSE expiry days) - same logic as above
+            next_thursdays = []
+            current_date = today
             
-            # Last Thursday of current month
-            last_thursday = today
-            while last_thursday.weekday() != 3:  # Thursday = 3
-                last_thursday += timedelta(days=1)
+            # Find next 3 Thursdays
+            while len(next_thursdays) < 3:
+                # Move to next Thursday
+                days_until_thursday = (3 - current_date.weekday() + 7) % 7
+                if days_until_thursday == 0:
+                    days_until_thursday = 7  # If today is Thursday, get next Thursday
+                
+                next_thursday = current_date + timedelta(days=days_until_thursday)
+                next_thursdays.append(next_thursday.strftime('%Y-%m-%d'))
+                current_date = next_thursday
             
-            # Next Thursday (next expiry)
-            next_thursday = last_thursday + timedelta(days=7)
+            # Cache fallback result
+            self._set_cache(cache_key, next_thursdays, self._expiry_cache_ttl)
             
-            # Following Thursday
-            following_thursday = next_thursday + timedelta(days=7)
-            
-            fallback_expiries = [
-                last_thursday.strftime('%Y-%m-%d'),
-                next_thursday.strftime('%Y-%m-%d'),
-                following_thursday.strftime('%Y-%m-%d')
-            ]
-            
-            logger.info(f"Using dynamic fallback expiries for {symbol}: {fallback_expiries}")
-            return fallback_expiries
+            logger.info(f"Using emergency fallback expiries for {symbol}: {next_thursdays}")
+            return next_thursdays
     
     async def get_option_chain(self, access_token: str, instrument_key: str, expiry_date: str = None) -> Dict[str, Any]:
         """Fetch option chain from Upstox API - WORKING ENDPOINT"""
         try:
-            logger.info(f"Fetching real option chain data for {instrument_key}, expiry: {expiry_date}")
+            logger.info(f"=== INVESTIGATION: get_option_chain called with instrument_key={instrument_key}, expiry={expiry_date} ===")
             
             # Use WORKING option chain endpoint
+            # Try without URL encoding first (like original working version)
             contracts_response = await self._make_request(
                 'get',
                 f"https://api.upstox.com/v2/option/chain",
@@ -207,6 +317,9 @@ class UpstoxClient:
                 }
             )
             
+            logger.info(f"=== INVESTIGATION: Trying without URL encoding ===")
+            logger.info(f"=== INVESTIGATION: HTTP Status: {contracts_response.status_code} ===")
+            
             if contracts_response.status_code == 401:
                 raise TokenExpiredError("Access token expired")
             elif contracts_response.status_code == 404:
@@ -216,60 +329,92 @@ class UpstoxClient:
                 logger.error(f"Upstox API error: {contracts_response.status_code} - {contracts_response.text}")
                 raise APIResponseError(f"HTTP {contracts_response.status_code}: {contracts_response.text}")
             
-            contracts_data = contracts_response.json()
-            logger.info("=== RAW UPSTOX PAYLOAD ===")
-            logger.info(contracts_response.text)
-            logger.info("=== END RAW UPSTOX PAYLOAD ===")
+            try:
+                contracts_data = contracts_response.json()
+                logger.info(f"=== INVESTIGATION: Option chain raw response type: {type(contracts_data)} ===")
+                logger.info(f"=== INVESTIGATION: Option chain raw response: {str(contracts_data)[:500]} ===")
+            except Exception as e:
+                logger.error(f"=== INVESTIGATION: Error parsing option chain JSON: {e}")
+                logger.error(f"=== INVESTIGATION: Response text: {contracts_response.text}")
+                raise APIResponseError(f"Failed to parse option chain response: {e}")
+            logger.info(f"=== INVESTIGATION: Raw JSON response type: {type(contracts_data)} ===")
+            logger.info(f"=== INVESTIGATION: Raw JSON response keys: {list(contracts_data.keys()) if isinstance(contracts_data, dict) else 'Not a dict'} ===")
             
             # Process the raw Upstox data into expected format
             if isinstance(contracts_data, dict) and "data" in contracts_data:
-                raw_contracts = contracts_data.get("data", [])
+                raw_data = contracts_data.get("data", [])
+                logger.info(f"=== INVESTIGATION: Extracted raw_data type: {type(raw_data)}, length: {len(raw_data) if isinstance(raw_data, list) else 'Not a list'} ===")
             else:
-                raw_contracts = contracts_data if isinstance(contracts_data, list) else []
+                raw_data = contracts_data if isinstance(contracts_data, list) else []
+                logger.info(f"=== INVESTIGATION: Using contracts_data directly as raw_data, type: {type(raw_data)}, length: {len(raw_data) if isinstance(raw_data, list) else 'Not a list'} ===")
             
-            # Separate calls and puts
+            # Handle the actual Upstox response structure (ARRAY of strikes)
             calls = []
             puts = []
             
-            for contract in raw_contracts:
-                if contract.get("instrument_type", "").startswith("OPTCE"):
-                    calls.append({
-                        "strike": contract.get("strike_price", 0),
-                        "call_oi": contract.get("open_interest", 0),
-                        "call_ltp": contract.get("last_price", 0),
-                        "call_volume": contract.get("volume", 0),
-                        "call_iv": contract.get("implied_volatility", 0)
-                    })
-                elif contract.get("instrument_type", "").startswith("OPTPE"):
-                    puts.append({
-                        "strike": contract.get("strike_price", 0),
-                        "put_oi": contract.get("open_interest", 0),
-                        "put_ltp": contract.get("last_price", 0),
-                        "put_volume": contract.get("volume", 0),
-                        "put_iv": contract.get("implied_volatility", 0)
-                    })
+            if isinstance(raw_data, list):
+                logger.info(f"=== INVESTIGATION: Processing {len(raw_data)} strike objects ===")
+                # Upstox returns an array of strike objects
+                for i, strike_data in enumerate(raw_data):
+                    if isinstance(strike_data, dict):
+                        strike_price = strike_data.get("strike_price", 0)
+                        logger.info(f"=== INVESTIGATION: Processing strike {i+1}: {strike_price} ===")
+                        
+                        # Process call options
+                        call_opt = strike_data.get("call_options", {})
+                        if call_opt and "market_data" in call_opt:
+                            calls.append({
+                                "strike": strike_price,
+                                "oi": call_opt["market_data"].get("oi", 0),
+                                "ltp": call_opt["market_data"].get("ltp", 0),
+                                "volume": call_opt["market_data"].get("volume", 0),
+                                "iv": call_opt.get("option_greeks", {}).get("iv", 0),
+                                "change": call_opt["market_data"].get("oi", 0) - call_opt["market_data"].get("prev_oi", 0)
+                            })
+                            logger.info(f"=== INVESTIGATION: Added call for strike {strike_price}: OI={call_opt['market_data'].get('oi', 0)} ===")
+                        
+                        # Process put options
+                        put_opt = strike_data.get("put_options", {})
+                        if put_opt and "market_data" in put_opt:
+                            puts.append({
+                                "strike": strike_price,
+                                "oi": put_opt["market_data"].get("oi", 0),
+                                "ltp": put_opt["market_data"].get("ltp", 0),
+                                "volume": put_opt["market_data"].get("volume", 0),
+                                "iv": put_opt.get("option_greeks", {}).get("iv", 0),
+                                "change": put_opt["market_data"].get("oi", 0) - put_opt["market_data"].get("prev_oi", 0)
+                            })
+                            logger.info(f"=== INVESTIGATION: Added put for strike {strike_price}: OI={put_opt['market_data'].get('oi', 0)} ===")
+                    else:
+                        logger.warning(f"=== INVESTIGATION: Strike {i+1} is not a dict: {type(strike_data)} ===")
+                else:
+                    logger.warning(f"=== INVESTIGATION: raw_data is not a list: {type(raw_data)} ===")
+            
+            logger.info(f"=== INVESTIGATION: Final counts - Calls: {len(calls)}, Puts: {len(puts)} ===")
             
             # Return processed option chain data
-            # Extract symbol from instrument_key (e.g., "NSE_INDEX|NIFTY50" -> "NIFTY")
+            # Extract symbol name from instrument_key (e.g., "NSE_INDEX|Nifty 50" -> "Nifty 50")
             symbol_name = instrument_key.split("|")[-1] if "|" in instrument_key else instrument_key
             
-            return {
+            result = {
                 "status": "success",
                 "data": {
                     "calls": calls,
-                    "puts": puts
-                },
-                "symbol": symbol_name,
-                "expiry": expiry_date,
-                "timestamp": datetime.now(timezone.utc).isoformat()
+                    "puts": puts,
+                    "symbol": symbol_name,
+                    "expiry": expiry_date,
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                }
             }
             
+            logger.info(f"=== INVESTIGATION: Returning result with {len(calls)} calls and {len(puts)} puts ===")
+            return result
         except httpx.RequestError as e:
             logger.error(f"Network error fetching option chain for {instrument_key}: {e}")
             raise APIResponseError(f"Network error: {e}")
         except TokenExpiredError as e:
             logger.error(f"Token expired fetching option chain for {instrument_key}: {e}")
-            raise
+            raise APIResponseError(f"Token expired: {e}")
         except APIResponseError as e:
             logger.error(f"API error fetching option chain for {instrument_key}: {e}")
             raise

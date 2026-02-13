@@ -14,8 +14,8 @@ function AuthScreen({ authData }: AuthScreenProps) {
     const event = new CustomEvent('stopPolling');
     window.dispatchEvent(event);
     
-    // Store the auth URL temporarily and redirect to Upstox
-    sessionStorage.setItem('upstox_auth_url', authData.login_url);
+    // SECURITY: No frontend state generation
+    // Backend will generate and manage state
     window.location.href = authData.login_url;
   };
 

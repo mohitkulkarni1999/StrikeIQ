@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import Head from 'next/head';
 import Dashboard from '../components/Dashboard';
-import { DashboardResponse } from '../types/dashboard';
+import { DashboardResponse, isAuthRequired, isRateLimit } from '../types/dashboard';
 
 export default function Home() {
   const [data, setData] = useState<DashboardResponse | null>(null);
@@ -10,28 +10,18 @@ export default function Home() {
 
   useEffect(() => {
     fetchMarketData();
+  }, []);
 
-    // Set up polling only if not loading and not in auth mode
-    let interval: NodeJS.Timeout | null = null;
-
-    const shouldPoll = () => {
-      if (data && 'session_type' in data && data.session_type === 'AUTH_REQUIRED') {
-        return false; // Don't poll if auth required
-      }
-      if (data && 'market_status' in data && data.market_status === 'CLOSED') {
-        return false; // Don't poll if market closed
-      }
-      return true;
-    };
-
-    if (shouldPoll()) {
-      interval = setInterval(fetchMarketData, 5000); // Refresh every 5 seconds
+  useEffect(() => {
+    // ONLY run when authenticated
+    if (!data || isAuthRequired(data) || isRateLimit(data)) {
+      return; // Don't poll if auth required or rate limited
     }
 
-    return () => {
-      if (interval) clearInterval(interval);
-    };
-  }, [selectedSymbol, data]);
+    const interval = setInterval(fetchMarketData, 60000); // 60 seconds
+    
+    return () => clearInterval(interval);
+  }, [selectedSymbol]); // Only depend on selectedSymbol
 
   const fetchMarketData = async () => {
     try {
@@ -40,9 +30,26 @@ export default function Home() {
       const response = await fetch(`${apiUrl}/api/dashboard/${selectedSymbol}`);
       const responseData: DashboardResponse = await response.json();
 
-      console.log('Received data:', responseData);
-      console.log('Response status:', response.status);
+      console.log("DASHBOARD RESPONSE:", responseData);
 
+      // AUTH_REQUIRED must be handled BEFORE any normal data logic
+      if (isAuthRequired(responseData)) {
+        console.warn("AUTH_REQUIRED received - stopping polling");
+        // Let Dashboard component handle auth required
+        setData(responseData);
+        setLoading(false);
+        return;
+      }
+
+      // RATE_LIMIT handling
+      if (isRateLimit(responseData)) {
+        console.warn("RATE_LIMIT received - stopping polling");
+        setData(responseData);
+        setLoading(false);
+        return;
+      }
+
+      // Only call setData for normal data if session_type is NOT present
       setData(responseData);
       setLoading(false);
 

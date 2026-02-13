@@ -6,7 +6,7 @@ interface ExpectedMoveChartProps {
 }
 
 export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
-  if (!signals) {
+  if (!signals || !signals.expected_move_signal) {
     return (
       <div className="glass-morphism rounded-xl p-6">
         <div className="text-center text-muted-foreground">
@@ -16,10 +16,11 @@ export default function ExpectedMoveChart({ signals }: ExpectedMoveChartProps) {
     );
   }
 
-  const { expected_move_signal } = signals;
-  const signal = expected_move_signal.signal;
-  const action = expected_move_signal.action;
-  const distance = expected_move_signal.distance;
+  const expected_move_signal = signals?.expected_move_signal || {
+    signal: 'NEUTRAL',
+    action: 'HOLD',
+    distance: 0
+  };
 
   const getSignalColor = (signal: string) => {
     switch (signal) {

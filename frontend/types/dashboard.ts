@@ -18,12 +18,22 @@ export interface AuthRequiredData {
   timestamp: string;
 }
 
-export type DashboardResponse = MarketData | AuthRequiredData;
+export interface RateLimitData {
+  session_type: 'RATE_LIMIT';
+  message: string;
+  timestamp: string;
+}
+
+export type DashboardResponse = MarketData | AuthRequiredData | RateLimitData;
 
 export function isAuthRequired(data: DashboardResponse): data is AuthRequiredData {
   return 'session_type' in data && data.session_type === 'AUTH_REQUIRED';
 }
 
+export function isRateLimit(data: DashboardResponse): data is RateLimitData {
+  return 'session_type' in data && data.session_type === 'RATE_LIMIT';
+}
+
 export function isMarketData(data: DashboardResponse): data is MarketData {
-  return !isAuthRequired(data);
+  return !isAuthRequired(data) && !isRateLimit(data);
 }

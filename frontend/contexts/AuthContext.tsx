@@ -6,13 +6,15 @@ interface AuthState {
   isLoading: boolean;
   error: string | null;
   lastCheck: number;
+  mode: 'NORMAL' | 'AUTH';
+  loginUrl: string | null;
 }
 
 type AuthAction = 
   | { type: 'AUTH_CHECK_START' }
   | { type: 'AUTH_CHECK_SUCCESS'; isAuthenticated: boolean }
   | { type: 'AUTH_CHECK_ERROR'; error: string }
-  | { type: 'AUTH_REQUIRED' }
+  | { type: 'AUTH_REQUIRED'; payload: { login_url: string } }
   | { type: 'AUTH_SUCCESS'; isAuthenticated: true };
 
 const initialState: AuthState = {
@@ -20,6 +22,8 @@ const initialState: AuthState = {
   isLoading: true,
   error: null,
   lastCheck: Date.now(),
+  mode: 'NORMAL',
+  loginUrl: null,
 };
 
 function authReducer(state: AuthState, action: AuthAction): AuthState {
@@ -52,6 +56,8 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         isLoading: false,
         error: 'Authentication required',
         lastCheck: Date.now(),
+        mode: 'AUTH',
+        loginUrl: action.payload.login_url,
       };
     
     case 'AUTH_SUCCESS':
@@ -85,6 +91,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
   const checkAuth = async () => {
+    // Don't check if already in auth required state
+    if (!state.isAuthenticated) return;
+    
     dispatch({ type: 'AUTH_CHECK_START' });
     
     try {
@@ -92,7 +101,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const data: DashboardResponse = await response.json();
       
       if (isAuthRequired(data)) {
-        dispatch({ type: 'AUTH_REQUIRED' });
+        dispatch({ type: 'AUTH_REQUIRED', payload: { login_url: data.login_url } });
       } else {
         dispatch({ type: 'AUTH_CHECK_SUCCESS', isAuthenticated: true });
       }
@@ -102,24 +111,20 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const handleAuthRequired = (authData: AuthRequiredData) => {
-    dispatch({ type: 'AUTH_REQUIRED' });
+    // Prevent redundant setState calls
+    if (!state.isAuthenticated && !state.isLoading) {
+      return; // Already in auth required state
+    }
+    
+    dispatch({ type: 'AUTH_REQUIRED', payload: { login_url: authData.login_url } });
     // Stop any polling here
     console.log('Authentication required, stopping polling');
   };
 
-  // Check auth on mount and periodically
+  // Check auth on mount only
   useEffect(() => {
     checkAuth();
-    
-    const interval = setInterval(() => {
-      // Only check if not currently loading
-      if (!state.isLoading) {
-        checkAuth();
-      }
-    }, 30000); // Check every 30 seconds
-
-    return () => clearInterval(interval);
-  }, []);
+  }, []); // Empty dependency array - only run once
 
   const value: AuthContextType = {
     state,
