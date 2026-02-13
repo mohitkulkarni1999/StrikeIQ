@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""
+Check what fields exist in option_chain_snapshots table
+"""
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'app'))
+
+from sqlalchemy import create_engine, text, inspect
+from app.core.config import settings
+
+def check_table_structure():
+    """Check table structure"""
+    engine = create_engine(settings.DATABASE_URL)
+    inspector = inspect(engine)
+    
+    # Get columns for option_chain_snapshots
+    columns = inspector.get_columns('option_chain_snapshots')
+    
+    print("Current columns in option_chain_snapshots:")
+    for column in columns:
+        print(f"  - {column['name']}: {column['type']}")
+    
+    # Get indexes
+    indexes = inspector.get_indexes('option_chain_snapshots')
+    print("\nCurrent indexes:")
+    for index in indexes:
+        print(f"  - {index['name']}: {index['column_names']}")
+
+if __name__ == "__main__":
+    check_table_structure()

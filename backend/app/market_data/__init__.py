@@ -9,11 +9,11 @@ async def start_data_scheduler():
     try:
         poller = get_poller_service()
         
-        # Add job to poll every 5 minutes
+        # Add job to poll every 15 minutes to reduce rate limiting
         _scheduler.add_job(
             poller.poll_market_data,
             'interval',
-            minutes=5,
+            minutes=15,
             id='market_data_poll'
         )
         

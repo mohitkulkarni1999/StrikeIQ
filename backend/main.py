@@ -12,6 +12,14 @@ from app.models.database import get_db
 from app.services.market_dashboard_service import MarketDashboardService
 from app.market_data import start_data_scheduler, stop_data_scheduler
 from app.market_data.market_data_service import get_latest_option_chain
+from app.api.v1 import (
+    auth_router,
+    market_router,
+    options_router,
+    system_router,
+    predictions_router,
+    debug_router
+)
 
 # Configure logging with file output
 import logging
@@ -20,6 +28,10 @@ from logging.handlers import RotatingFileHandler
 # Create logs directory if it doesn't exist
 import os
 os.makedirs("logs", exist_ok=True)
+
+# DEBUG: Log process ID for debugging
+logger = logging.getLogger(__name__)
+logger.info(f"Process ID: {os.getpid()}")
 
 # Setup file logging
 file_handler = RotatingFileHandler(
@@ -42,7 +54,6 @@ logging.basicConfig(
     level=getattr(logging, settings.LOG_LEVEL.upper()),
     handlers=[file_handler, console_handler]
 )
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -72,6 +83,14 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Include all v1 routers
+app.include_router(auth_router)
+app.include_router(market_router)
+app.include_router(options_router)
+app.include_router(system_router)
+app.include_router(predictions_router)
+app.include_router(debug_router)
+
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
@@ -80,6 +99,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Print all registered routes for debugging
+logger.info("=== REGISTERED ROUTES ===")
+for route in app.routes:
+    if hasattr(route, 'path'):
+        logger.info(f"Route: {route.path} | Methods: {getattr(route, 'methods', 'N/A')}")
+logger.info("=== END ROUTES ===")
 
 
 @app.get("/")

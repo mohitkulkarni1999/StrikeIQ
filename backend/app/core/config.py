@@ -9,11 +9,13 @@ class Settings:
     LOG_LEVEL: str = "INFO"
     ALLOWED_HOSTS: List[str] = ["http://localhost:3000", "http://localhost:8000"]
     
-    # Load with fallback to empty string, but preferably valid env vars should be present
-    UPSTOX_API_KEY: str = os.getenv('UPSTOX_API_KEY', "53c878a9-3f5d-44f9-aa2d-2528d34a24cd")
-    # Secret must come from env to avoid 401
-    UPSTOX_API_SECRET: str = os.getenv('UPSTOX_API_SECRET', "your_api_secret_here")
+    # Load with fallback to empty string - SECURITY: No hardcoded credentials
+    UPSTOX_API_KEY: str = os.getenv('UPSTOX_API_KEY', "")
+    UPSTOX_API_SECRET: str = os.getenv('UPSTOX_API_SECRET', "")
     REDIRECT_URI: str = os.getenv('UPSTOX_REDIRECT_URI', "http://localhost:8000/api/v1/auth/upstox/callback")
+    
+    # Security settings
+    SECRET_KEY: str = os.getenv('SECRET_KEY', "your-secret-key-change-in-production")
     
     # Frontend URL for OAuth initiation
     FRONTEND_URL: str = os.getenv('FRONTEND_URL', "http://localhost:3000")

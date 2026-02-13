@@ -52,8 +52,10 @@ class MarketDashboardService:
     
     def __init__(self, db):
         self.db = db
+        # Use singleton UpstoxClient instance
+        from .upstox_client import UpstoxClient
         self.client = UpstoxClient()
-        self.cache = MarketDataCache(ttl_seconds=30)
+        self.cache = MarketDataCache(ttl_seconds=120)
         self.auth_service = get_upstox_auth_service()
     
     async def get_dashboard_data(self, symbol: str) -> Dict[str, Any]:
@@ -111,55 +113,44 @@ class MarketDashboardService:
         
         except APIResponseError as e:
             logger.error(f"API error for {symbol}: {e}")
+            # Check if this is an auth error
+            error_str = str(e).lower()
+            if "401" in error_str or "unauthorized" in error_str or "token" in error_str:
+                logger.warning(f"Detected authentication error in API response: {e}")
+                return self._create_auth_required_response()
             market_data = self._create_error_response(symbol, str(e))
             return self._format_market_data_response(market_data)
         
         except Exception as e:
             logger.error(f"Unexpected error for {symbol}: {type(e).__name__}: {e}")
+            # Check if this is an auth error
+            error_str = str(e).lower()
+            if "401" in error_str or "unauthorized" in error_str or "token" in error_str:
+                logger.warning(f"Detected authentication error in exception: {e}")
+                return self._create_auth_required_response()
             market_data = self._create_error_response(symbol, f"Unexpected error: {e}")
             return self._format_market_data_response(market_data)
     
     async def _check_authentication(self) -> Dict[str, Any]:
-        """Centralized authentication check"""
+        """
+        Clean authentication check.
+        No caching.
+        No expiry access.
+        No time dependency.
+        """
+
         try:
-            if not self.auth_service.is_authenticated():
-                logger.info("Not authenticated - no credentials")
+            token = await self.auth_service.get_valid_access_token()
+
+            if not token:
+                logger.warning("No valid token available")
                 return {"authenticated": False, "token": None}
-            
-            try:
-                token = await self.auth_service.get_valid_access_token()
-                if not token:
-                    logger.info("No valid token available")
-                    return {"authenticated": False, "token": None}
-                
-                # Validate token by making a test API call
-                logger.info(f"Validating token with test API call...")
-                try:
-                    test_response = await self.client.get_market_quote(token, "NSE_INDEX|NIFTY50")
-                    logger.info(f"Token validation successful")
-                    return {"authenticated": True, "token": token}
-                except Exception as e:
-                    # Check if it's a rate limiting error
-                    if "429" in str(e) or "Too Many Requests" in str(e):
-                        logger.warning(f"Rate limited, waiting before retry...")
-                        await asyncio.sleep(5)  # Wait 5 seconds before retry
-                        try:
-                            test_response = await self.client.get_market_quote(token, "NSE_INDEX|NIFTY50")
-                            logger.info(f"Token validation successful after retry")
-                            return {"authenticated": True, "token": token}
-                        except Exception as retry_e:
-                            logger.error(f"Retry also failed: {retry_e}")
-                            return {"authenticated": False, "token": None}
-                    else:
-                        logger.error(f"Token validation failed: {e}")
-                        return {"authenticated": False, "token": None}
-                
-            except TokenExpiredError as e:
-                logger.warning(f"Token expired during check: {e}")
-                return {"authenticated": False, "token": None}
-            
-        except Exception as e:
-            logger.error(f"Authentication check failed: {e}")
+
+            logger.info("Authentication successful")
+            return {"authenticated": True, "token": token}
+
+        except Exception:
+            logger.exception("Authentication check crashed")
             return {"authenticated": False, "token": None}
     
     def _create_auth_required_response(self) -> Dict[str, Any]:
@@ -188,8 +179,24 @@ class MarketDashboardService:
             logger.info(f"Using instrument key: {instrument_key}")
             
             # Fetch quote
-            api_response = await self.client.get_market_quote(token, instrument_key)
-            logger.info(f"API response from Upstox: {api_response}")
+            try:
+                api_response = await self.client.get_market_quote(token, instrument_key)
+                logger.info(f"API response from Upstox: {api_response}")
+            except TokenExpiredError as e:
+                logger.warning(f"Token expired during market data fetch: {e}")
+                raise  # Re-raise to trigger auth required response
+            except APIResponseError as e:
+                logger.error(f"API error during market data fetch: {e}")
+                # Check if this is an auth error
+                if "401" in str(e) or "unauthorized" in str(e).lower():
+                    raise TokenExpiredError("Token appears to be revoked")
+                raise  # Re-raise as API error
+            except Exception as e:
+                logger.error(f"Unexpected error during market data fetch: {e}")
+                # Check if this is an auth error
+                if "401" in str(e) or "unauthorized" in str(e).lower():
+                    raise TokenExpiredError("Token appears to be revoked")
+                raise APIResponseError(f"Failed to fetch market data: {e}")
             
             # Parse response
             return self._parse_market_data(symbol, api_response)
@@ -198,41 +205,113 @@ class MarketDashboardService:
             logger.error(f"Error fetching market data for {symbol}: {e}")
             raise APIResponseError(f"Failed to fetch market data: {e}")
     
+    # Instrument key mapping for Upstox API v2/v3
+    INSTRUMENT_MAP = {
+        "NIFTY": "NSE_INDEX|Nifty 50",
+        "BANKNIFTY": "NSE_INDEX|Nifty Bank"
+    }
+    
+    async def get_nearest_expiry(self, symbol: str, token: str) -> str:
+        """Get nearest expiry date for symbol"""
+        try:
+            # Get instrument key first
+            instrument_key = await self._get_instrument_key(symbol, token)
+            
+            # Fetch available expiry dates
+            client = await self._get_client(token, "v2")
+            response = await client.get("/option/contract", params={"instrument_key": instrument_key})
+            
+            if response.status_code == 401:
+                raise TokenExpiredError("Access token expired")
+            elif response.status_code != 200:
+                logger.error(f"Upstox contract API error: {response.status_code} - {response.text}")
+                raise APIResponseError(f"HTTP {response.status_code}: {response.text}")
+            
+            data = response.json()
+            logger.info(f"Upstox contract response for {instrument_key}: {data}")
+            
+            # Validate response
+            if not isinstance(data, dict) or "data" not in data:
+                raise APIResponseError("Invalid contract response")
+            
+            contracts = data["data"]
+            if not isinstance(contracts, list) or len(contracts) == 0:
+                raise APIResponseError("No expiry dates available")
+            
+            # Extract unique expiry dates and sort
+            expiry_dates = []
+            for contract in contracts:
+                if "expiry" in contract:
+                    expiry_dates.append(contract["expiry"])
+            
+            if not expiry_dates:
+                raise APIResponseError("No expiry dates found")
+            
+            # Sort dates and return nearest future expiry
+            from datetime import datetime, timezone
+            current_date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+            future_expiries = [d for d in expiry_dates if d > current_date]
+            
+            if not future_expiries:
+                # If no future expiries, return the latest one
+                future_expiries = sorted(expiry_dates)
+            
+            nearest_expiry = sorted(future_expiries)[0]
+            logger.info(f"Selected nearest expiry for {symbol}: {nearest_expiry}")
+            return nearest_expiry
+            
+        except Exception as e:
+            logger.error(f"Error getting expiry for {symbol}: {e}")
+            raise APIResponseError(f"Failed to get expiry: {e}")
+
     async def _get_instrument_key(self, symbol: str, token: str) -> str:
-        """Get instrument key for symbol (simplified)"""
-        # This would integrate with instrument service
-        # For now, return common keys
-        if symbol.upper() == "NIFTY":
-            return "NSE_INDEX|NIFTY50"
-        elif symbol.upper() == "BANKNIFTY":
-            return "NSE_INDEX|BANKNIFTY"
-        else:
+        """Get instrument key for symbol"""
+        symbol_upper = symbol.upper()
+        if symbol_upper not in self.INSTRUMENT_MAP:
             raise APIResponseError(f"Unknown symbol: {symbol}")
+        
+        instrument_key = self.INSTRUMENT_MAP[symbol_upper]
+        logger.info(f"Mapped {symbol} to instrument key: {instrument_key}")
+        return instrument_key
     
     def _parse_market_data(self, symbol: str, api_response: Dict[str, Any]) -> MarketData:
         """Parse API response into MarketData"""
         try:
-            data_field = api_response.get("data", {})
+            # Validate Upstox response
+            if api_response.get("status") != "success":
+                logger.error(f"Upstox API error: {api_response}")
+                # Check if this is an authentication error
+                if "401" in str(api_response) or "unauthorized" in str(api_response).lower():
+                    raise TokenExpiredError("Token appears to be revoked")
+                raise APIResponseError(f"Upstox API error: {api_response}")
             
-            # Extract LTP from Upstox API response structure
-            spot_price = None
-            if isinstance(data_field, dict):
-                # Upstox API returns ltp in nested structure
-                spot_price = data_field.get("ltp") or data_field.get("last_price")
-                # Also check for nested data structure
-                if not spot_price and "market_quote" in data_field:
-                    market_quote = data_field["market_quote"]
-                    if isinstance(market_quote, dict):
-                        spot_price = market_quote.get("ltp") or market_quote.get("last_price")
+            data = api_response.get("data", {})
             
-            logger.info(f"Parsed data for {symbol}: spot_price={spot_price}, api_response={api_response}")
+            if not data:
+                logger.error(f"Empty LTP response: {api_response}")
+                return self._build_no_data_response(symbol)
             
-            # Get actual market status based on current time
-            market_status = self._get_market_status()
+            # Extract nested instrument data
+            instrument_data = next(iter(data.values()), None)
+            
+            if not instrument_data:
+                logger.error(f"No instrument data in response: {api_response}")
+                return self._build_no_data_response(symbol)
+            
+            ltp = instrument_data.get("last_price")
+            
+            if ltp is None:
+                logger.error(f"No last_price in instrument data: {instrument_data}")
+                return self._build_no_data_response(symbol)
+            
+            # Fix market_status logic
+            market_status = MarketStatus.OPEN
+            
+            logger.info(f"Successfully parsed spot price for {symbol}: {ltp}")
             
             return MarketData(
                 symbol=symbol,
-                spot_price=spot_price,
+                spot_price=ltp,
                 previous_close=None,  # Would need previous close data
                 change=None,         # Would calculate from previous close
                 change_percent=None,  # Would calculate from previous close
@@ -243,6 +322,18 @@ class MarketDashboardService:
         except Exception as e:
             logger.error(f"Error parsing market data for {symbol}: {e}")
             raise APIResponseError(f"Failed to parse market data: {e}")
+    
+    def _build_no_data_response(self, symbol: str) -> MarketData:
+        """Build no data response"""
+        return MarketData(
+            symbol=symbol,
+            spot_price=None,
+            previous_close=None,
+            change=None,
+            change_percent=None,
+            timestamp=datetime.now(timezone.utc),
+            market_status=MarketStatus.NO_DATA
+        )
     
     def _get_market_status(self) -> MarketStatus:
         """Get actual market status based on NSE trading hours"""

@@ -8,6 +8,7 @@ class MarketStatus(Enum):
     CLOSED = "CLOSED"
     ERROR = "ERROR"
     AUTH_REQUIRED = "AUTH_REQUIRED"
+    NO_DATA = "NO_DATA"
 
 class SessionType(Enum):
     LIVE = "LIVE"
