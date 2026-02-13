@@ -63,7 +63,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
   // Fetch spot price from dashboard API
   const fetchSpotPrice = async () => {
     try {
-      console.log("=== DEBUG: Fetching spot price from dashboard API ===");
+      console.log(`=== DEBUG: Fetching spot price from dashboard API for ${symbol} ===`);
       const response = await axios.get(`http://localhost:8000/api/dashboard/${symbol}`);
       console.log("=== DEBUG: Dashboard response:", response.data);
       
@@ -84,18 +84,35 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
   const fetchAvailableExpiries = async () => {
     try {
       setExpiryLoading(true);
+      console.log(`🔍 Fetching contracts for ${symbol}...`);
+      console.log(`🔍 Full API URL: http://localhost:8000/api/v1/options/contract/${symbol}`);
       const response = await axios.get(`http://localhost:8000/api/v1/options/contract/${symbol}`);
       
-      console.log('Expiry response:', response.data); // Debug log
+      console.log('📊 Expiry response:', response.data);
+      console.log('📊 Response status:', response.status);
+      console.log('📊 Response type:', typeof response.data);
       
-      // Handle different response formats
+      // Check if response is AUTH_REQUIRED
+      if (response.data && response.data.session_type === 'AUTH_REQUIRED') {
+        console.log('🚫 AUTH_REQUIRED received for contracts - authentication needed');
+        setError('Authentication required to fetch option contracts');
+        setAvailableExpiries([]);
+        return;
+      }
+      
+      // Handle successful response with real data
       let expiryDates: string[] = [];
-      if (response.data && response.data.data && Array.isArray(response.data.data)) {
+      if (response.data && response.data.status === 'success' && response.data.data) {
         expiryDates = response.data.data;
-      } else if (response.data && Array.isArray(response.data)) {
+        console.log(`✅ Got ${expiryDates.length} expiry dates for ${symbol}`);
+      } else if (Array.isArray(response.data)) {
         expiryDates = response.data;
+        console.log(`✅ Got ${expiryDates.length} expiry dates (direct array)`);
       } else {
-        console.error('Unexpected response format:', response.data);
+        console.error('❌ Unexpected response format:', response.data);
+        setError('Invalid response format from contracts API');
+        setAvailableExpiries([]);
+        return;
       }
       
       const expiries: ExpiryDate[] = expiryDates.map((date: string) => {
@@ -115,8 +132,8 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
       
       setAvailableExpiries(expiries);
       
-      // Auto-select nearest expiry if none selected
-      if (!selectedExpiry && expiries.length > 0) {
+      // Auto-select nearest expiry (always select when new expiries are loaded)
+      if (expiries.length > 0) {
         // Prioritize current expiries (within next week)
         const currentExpiry = expiries.find(e => e.isCurrent);
         const nearestExpiry = currentExpiry || expiries[0];
@@ -137,13 +154,15 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
 
   // Handle expiry selection
   const handleExpiryChange = (expiry: string) => {
+    console.log(`📅 Expiry selected: ${expiry} for ${symbol}`);
     setSelectedExpiry(expiry);
   };
 
-  // Fetch expiries on component mount
+  // Reset expiry when symbol changes
   useEffect(() => {
-    fetchAvailableExpiries();
-    fetchSpotPrice(); // Fetch spot price
+    console.log(`🔄 Symbol changed to ${symbol}, resetting expiry`);
+    setSelectedExpiry('');
+    setOiData([]);
   }, [symbol]);
 
   // Fetch spot price when symbol changes
@@ -171,105 +190,74 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
     return closest;
   }, [spotPrice, oiData]);
 
+  // Fetch available expiry dates
+  useEffect(() => {
+    console.log(`🔄 Fetching expiries for ${symbol}...`);
+    fetchAvailableExpiries();
+  }, [symbol]);
+
   // Fetch option chain data
   useEffect(() => {
+    console.log(`🔍 Option chain useEffect triggered. selectedExpiry: "${selectedExpiry}", symbol: ${symbol}`);
     // Only fetch if we have a selected expiry
     if (selectedExpiry) {
+      console.log(`🔍 Starting option chain fetch for ${symbol} with expiry: ${selectedExpiry}`);
       const fetchOptionChain = async () => {
         try {
           setLoading(true);
           setError(null);
           
-          console.log("Fetching option chain with expiry:", selectedExpiry);
+          console.log(`📡 Fetching option chain for ${symbol} with expiry: ${selectedExpiry}`);
+          console.log(`📡 Full API URL: http://localhost:8000/api/v1/options/chain/${symbol}?expiry_date=${selectedExpiry}`);
+          if (symbol === 'BANKNIFTY') {
+            console.log('📡 Option chain API called for BANKNIFTY');
+          }
           const response = await axios.get(
             `http://localhost:8000/api/v1/options/chain/${symbol}?expiry_date=${selectedExpiry}`
           );
         
-          console.log("BACKEND OPTION CHAIN:", response.data);
-          console.log("FULL RESPONSE STRUCTURE:", JSON.stringify(response.data, null, 2));
+          console.log("📊 Option chain response:", response.data);
           
-          const chain = response.data;
+          // Check if response is AUTH_REQUIRED
+          if (response.data && response.data.session_type === 'AUTH_REQUIRED') {
+            console.log('🚫 AUTH_REQUIRED received for option chain - authentication needed');
+            setError('Authentication required to fetch option chain data');
+            setOiData([]);
+            return;
+          }
           
-          // Backend returns: {status: "success", data: {symbol, expiry, calls, puts}}
-          const calls = chain?.data?.calls || [];
-          const puts = chain?.data?.puts || [];
-          console.log("=== DEBUG: First 3 calls ===");
-          console.table(calls?.slice(0, 3));
-          console.log("=== DEBUG: First 3 puts ===");
-          console.table(puts?.slice(0, 3));
-          console.log("=== DEBUG: Expected data path: chain.data.calls ===");
-          console.log("=== DEBUG: Actual calls path:", chain?.data?.calls);
-          console.log("=== DEBUG: Backend 25600 strike data:", calls.find(c => c.strike === 25600));
-          console.log("=== DEBUG: Backend 25600 OI:", calls.find(c => c.strike === 25600)?.oi);
-        
-          const transformedData = calls.map((call: any) => {
-            const matchingPut = puts.find(
-              (p: any) => p.strike === call.strike
-            );
-        
-            return {
-              strike: call.strike,
-              oi: call.oi || 0,
-              change: call.change || 0,
-              ltp: call.ltp || 0,
-              put_ltp: matchingPut?.ltp || 0,
-              put_change: matchingPut?.change || 0,
-              put_oi: matchingPut?.oi || 0,
-            };
-          }).sort((a, b) => a.strike - b.strike); // Sort by strike value (ascending)
-        
-          // Reorder to put ATM strike in the middle of visible area
-          if (spotPrice && transformedData.length > 0) {
-            // Sort by strike value (ascending)
-            const sortedData = transformedData.sort((a, b) => a.strike - b.strike);
+          // Handle successful response with real data
+          if (response.data && response.data.status === 'success') {
+            console.log(`✅ Got option chain data for ${symbol}`);
+            const chain = response.data;
             
-            // Find the exact ATM strike (closest to spot price)
-            const atmStrike = sortedData.reduce((closest, current) => {
-              const currentDist = Math.abs(current.strike - spotPrice);
-              const closestDist = Math.abs(closest.strike - spotPrice);
-              return currentDist < closestDist ? current : closest;
-            });
+            // Backend returns: {status: "success", data: {symbol, expiry, calls, puts}}
+            const calls = chain?.data?.calls || [];
+            const puts = chain?.data?.puts || [];
             
-            // Calculate display window to center ATM strike
-            const totalRows = sortedData.length;
-            const visibleRows = 11; // Show 11 rows (5 above + ATM + 5 below)
-            const halfRows = Math.floor(visibleRows / 2);
+            console.log(`📊 Got ${calls.length} calls and ${puts.length} puts`);
+            console.log("=== DEBUG: First 3 calls ===");
+            console.table(calls?.slice(0, 3));
+            console.log("=== DEBUG: First 3 puts ===");
+            console.table(puts?.slice(0, 3));
             
-            // Find ATM index
-            const atmIndex = sortedData.findIndex(row => row.strike === atmStrike.strike);
-            
-            // Calculate start index to center ATM strike
-            let startIndex = Math.max(0, atmIndex - halfRows);
-            let endIndex = Math.min(totalRows, startIndex + visibleRows);
-            
-            // Adjust if we're at the end to always show visibleRows
-            if (endIndex - startIndex < visibleRows && totalRows >= visibleRows) {
-              startIndex = Math.max(0, totalRows - visibleRows);
-              endIndex = totalRows;
-            }
-            
-            const displayData = sortedData.slice(startIndex, endIndex);
-            
-            // Mark the ATM strike
-            const markedData = displayData.map(row => ({
-              ...row,
-              isATM: row.strike === atmStrike.strike
-            }));
-            
-            console.log(`=== DEBUG: ATM Strike: ${atmStrike.strike}, Position: ${atmIndex}, Display: ${startIndex}-${endIndex}`);
-            
-            setOiData(markedData);
-          } else {
+            // Find ATM strike and transform data
+            const transformedData = transformOptionChainData(calls, puts, spotPrice);
+            console.log(`🔄 Transformed data: ${transformedData.length} rows`);
             setOiData(transformedData);
+            setError(null); // Clear any previous errors
+            
+          } else {
+            console.error('❌ Invalid option chain response format:', response.data);
+            setError('Invalid response format from option chain API');
+            setOiData([]);
+            return;
           }
         
-        } catch (err: any) {
-          console.error("AXIOS ERROR FULL:", err);
-          if (err.response) {
-            console.error("Response data:", err.response.data);
-            console.error("Response status:", err.response.status);
-          }
+        } catch (error: any) {
+          console.error('❌ Error fetching option chain:', error);
           setError('Failed to fetch option chain data');
+          setOiData([]);
         } finally {
           setLoading(false);
         }
@@ -277,7 +265,41 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
 
       fetchOptionChain();
     }
-  }, [symbol, selectedExpiry]);
+  }, [symbol, selectedExpiry, spotPrice]);
+
+  // Transform option chain data into the format expected by the table
+  const transformOptionChainData = (calls: any[], puts: any[], spotPrice: number) => {
+    const transformedData = calls.map((call: any) => {
+      const matchingPut = puts.find(
+        (p: any) => p.strike === call.strike
+      );
+    
+      return {
+        strike: call.strike,
+        oi: call.oi || 0,
+        change: call.change || 0,
+        ltp: call.ltp || 0,
+        putOi: matchingPut?.oi || 0,
+        putChange: matchingPut?.change || 0,
+        putLtp: matchingPut?.ltp || 0,
+      };
+    });
+    
+    // Find ATM strike (closest to spot price)
+    const atmStrike = transformedData.reduce((closest: any, current: any) => {
+      return Math.abs(current.strike - spotPrice) < Math.abs(closest.strike - spotPrice)
+        ? current
+        : closest;
+    }, transformedData[0]);
+    
+    // Mark ATM strike
+    const finalData = transformedData.map((item: any) => ({
+      ...item,
+      isATM: item.strike === atmStrike.strike,
+    }));
+    
+    return finalData;
+  };
 
   if (loading) {
     return (
@@ -306,8 +328,10 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
 
   // Debug logs before rendering
   console.log("=== DEBUG: About to render oiData with", oiData?.length, "rows");
+  console.log("=== DEBUG: Current symbol:", symbol);
   console.log("=== DEBUG: Current spot price:", spotPrice);
   console.log("=== DEBUG: Closest strike to spot price:", closestStrike);
+  console.log("=== DEBUG: Selected expiry:", selectedExpiry);
   oiData.forEach((row, index) => {
     if (index < 3) {
       console.log(`=== DEBUG: Row ${index} strike=${row.strike} oi=${row.oi} ltp=${row.ltp} spotMatch=${row.strike === spotPrice}`);
@@ -316,30 +340,6 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
 
   return (
     <div className="space-y-4">
-      {/* Header */}
-      <div className="mb-4 p-3 glass-morphism rounded-lg">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-4xl font-bold text-gradient mb-2">StrikeIQ</h1>
-            <p className="text-muted-foreground">AI-Powered Options Market Intelligence</p>
-          </div>
-          <div className="flex items-center gap-4">
-            <select 
-              value={symbol}
-              onChange={(e) => setSelectedExpiry('')}
-              className="glass-morphism px-4 py-2 rounded-lg border border-white/10 focus:outline-none focus:ring-2 focus:ring-primary-500 focus:border-transparent"
-            >
-              <option value="NIFTY">NIFTY</option>
-              <option value="BANKNIFTY">BANKNIFTY</option>
-            </select>
-            <div className="flex items-center gap-2">
-              <div className="status-indicator status-offline"></div>
-              <span className="text-sm text-muted-foreground">Loading</span>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Expiry Selector */}
       <div className="mb-4 p-3 glass-morphism rounded-lg">
         <div className="flex items-center justify-between">
@@ -408,6 +408,11 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
             {oiData.map((row, index) => {
               const isATM = row.isATM || false;
               
+              // Debug first few rows
+              if (index < 3) {
+                console.log(`🔍 Rendering row ${index}: strike=${row.strike}, callOI=${row.oi}, putOI=${row.putOi}, callLTP=${row.ltp}, putLTP=${row.putLtp}`);
+              }
+              
               return (
                 <tr 
                   key={row.strike} 
@@ -458,7 +463,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   
                   {/* Put LTP */}
                   <td className="py-4 px-4 text-center text-sm font-medium">
-                    {row.put_ltp?.toLocaleString('en-IN', {
+                    {row.putLtp?.toLocaleString('en-IN', {
                       style: 'currency',
                       currency: 'INR'
                     })}
@@ -467,11 +472,11 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                   {/* Put Change */}
                   <td className="py-4 px-4 text-center">
                     <div className={`px-3 py-2 rounded text-sm font-medium ${
-                      row.put_change > 0 ? 'bg-success-500/20 text-success-500' :
-                      row.put_change < 0 ? 'bg-danger-500/20 text-danger-500' :
+                      row.putChange > 0 ? 'bg-success-500/20 text-success-500' :
+                      row.putChange < 0 ? 'bg-danger-500/20 text-danger-500' :
                       'bg-gray-500/20 text-gray-300'
                     }`}>
-                      {row.put_change?.toLocaleString('en-IN')}
+                      {row.putChange?.toLocaleString('en-IN')}
                     </div>
                   </td>
                   
@@ -481,7 +486,7 @@ export default function OIHeatmap({ symbol }: OIHeatmapProps) {
                       className="px-3 py-2 rounded text-sm font-medium text-white oi-heatmap-cell"
                       style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
                     >
-                      {row.put_oi?.toLocaleString('en-IN')}
+                      {row.putOi?.toLocaleString('en-IN')}
                     </div>
                   </td>
                 </tr>

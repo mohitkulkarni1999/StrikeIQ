@@ -11,9 +11,10 @@ import AuthScreen from './AuthScreen';
 
 interface DashboardProps {
   data: DashboardResponse | null;
+  symbol: string;
 }
 
-function DashboardComponent({ data }: DashboardProps) {
+function DashboardComponent({ data, symbol }: DashboardProps) {
   const { state: authState, handleAuthRequired } = useAuth();
   const [pollingInterval, setPollingInterval] = useState<NodeJS.Timeout | null>(null);
 
@@ -31,32 +32,9 @@ function DashboardComponent({ data }: DashboardProps) {
     }
   }, [data, handleAuthRequired, pollingInterval]);
 
-  // Show auth button if in AUTH mode
-  if (authState.mode === 'AUTH' && authState.loginUrl) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
-        <div className="max-w-md w-full mx-4">
-          <div className="glass-morphism rounded-2xl p-8 text-center">
-            <div className="w-20 h-20 bg-orange-500 rounded-full flex items-center justify-center mx-auto mb-6">
-              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
-            </div>
-            
-            <h1 className="text-3xl font-bold text-white mb-2">Authentication Required</h1>
-            <p className="text-gray-300 mb-8">Please authenticate to access market data</p>
-            
-            <button
-              onClick={() => window.location.href = authState.loginUrl}
-              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-orange-500/25"
-            >
-              Authenticate to Upstox
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  }
+  // Always render MarketDashboard - let it handle auth state internally
+  console.log(`🔍 DashboardComponent: Rendering with symbol=${symbol}, data=${data ? 'exists' : 'null'}`);
+  return <MarketDashboard marketData={data} symbol={symbol} authState={authState} />;
 
   // Setup polling for authenticated state
   useEffect(() => {
@@ -106,7 +84,7 @@ function DashboardComponent({ data }: DashboardProps) {
 
   // Show market data if authenticated
   if (data && isMarketData(data)) {
-    return <MarketDashboard marketData={data} />;
+    return <MarketDashboard marketData={data} symbol={symbol} />;
   }
 
   // Fallback
@@ -120,10 +98,52 @@ function DashboardComponent({ data }: DashboardProps) {
 }
 
 interface MarketDashboardProps {
-  marketData: MarketData;
+  marketData: DashboardResponse | null;
+  symbol: string;
+  authState: any;
 }
 
-function MarketDashboard({ marketData }: MarketDashboardProps) {
+function MarketDashboard({ marketData, symbol, authState }: MarketDashboardProps) {
+  console.log(`🔍 MarketDashboard: Received symbol=${symbol}, marketData.symbol=${marketData?.symbol}`);
+  
+  // Show auth button if in AUTH mode (handle auth state here to avoid hooks issues)
+  if (authState.mode === 'AUTH' && authState.loginUrl) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="max-w-md w-full mx-4">
+          <div className="glass-morphism rounded-2xl p-8 text-center">
+            <div className="w-20 h-20 bg-orange-500 rounded-full flex items-center justify-center mx-auto mb-6">
+              <svg className="w-10 h-10 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+              </svg>
+            </div>
+            
+            <h1 className="text-3xl font-bold text-white mb-2">Authentication Required</h1>
+            <p className="text-gray-300 mb-8">Please authenticate to access market data</p>
+            
+            <button
+              onClick={() => window.location.href = authState.loginUrl}
+              className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-4 px-6 rounded-xl transition-all duration-200 transform hover:scale-105 shadow-lg hover:shadow-orange-500/25"
+            >
+              Authenticate to Upstox
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Check if we have valid market data
+  if (!marketData || !isMarketData(marketData)) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-900 via-purple-900 to-slate-900 flex items-center justify-center">
+        <div className="text-center text-white">
+          <p>Loading market data...</p>
+        </div>
+      </div>
+    );
+  }
+
   // Check if market is closed
   const isMarketClosed = marketData.market_status === "CLOSED";
   const hasError = marketData.market_status === "ERROR";
@@ -189,7 +209,7 @@ function MarketDashboard({ marketData }: MarketDashboardProps) {
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-2xl font-semibold mb-2">
-              {marketData.symbol}
+              {symbol}
             </h2>
             <div className="flex items-center gap-4">
               <span className="text-3xl font-bold">
@@ -201,6 +221,9 @@ function MarketDashboard({ marketData }: MarketDashboardProps) {
                   'Loading...'
                 }
               </span>
+              <div className="text-xs text-muted-foreground">
+                Debug: marketData.symbol={marketData.symbol}, marketData.spot_price={marketData.spot_price}
+              </div>
               {marketData.change !== null && marketData.change !== undefined && (
                 <span
                   className={`text-lg font-medium ${
@@ -217,6 +240,7 @@ function MarketDashboard({ marketData }: MarketDashboardProps) {
               )}
             </div>
           </div>
+
           <div className="text-right">
             <div className="text-sm text-muted-foreground mb-1">Market Status</div>
             <div className="flex items-center gap-2">
@@ -257,7 +281,10 @@ function MarketDashboard({ marketData }: MarketDashboardProps) {
       <SignalCards signals={null} />
 
       {/* OI Heatmap - Full Width */}
-      <OIHeatmap symbol={marketData.symbol} />
+      <OIHeatmap symbol={symbol} />
+      <div className="text-xs text-muted-foreground mt-2">
+        Debug: Dashboard component rendering with symbol={symbol}, marketData.symbol={marketData.symbol}
+      </div>
     </div>
   );
 }

@@ -91,9 +91,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [state, dispatch] = useReducer(authReducer, initialState);
 
   const checkAuth = async () => {
-    // Don't check if already in auth required state
-    if (!state.isAuthenticated) return;
-    
+    // Always check auth status, regardless of current state
     dispatch({ type: 'AUTH_CHECK_START' });
     
     try {
@@ -121,10 +119,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
     console.log('Authentication required, stopping polling');
   };
 
-  // Check auth on mount only
+  // Listen for auth status updates from polling
   useEffect(() => {
-    checkAuth();
-  }, []); // Empty dependency array - only run once
+    console.log('🎧 AuthContext: Setting up event listeners');
+    
+    const handleAuthRequired = (event: CustomEvent) => {
+      console.log('🚫 AuthContext: Received authRequired event', event.detail);
+      const { login_url } = event.detail;
+      dispatch({ type: 'AUTH_REQUIRED', payload: { login_url } });
+    };
+
+    const handleAuthSuccess = () => {
+      console.log('✅ AuthContext: Received authSuccess event');
+      dispatch({ type: 'AUTH_SUCCESS', isAuthenticated: true });
+    };
+
+    window.addEventListener('authRequired', handleAuthRequired as EventListener);
+    window.addEventListener('authSuccess', handleAuthSuccess);
+
+    console.log('✅ AuthContext: Event listeners set up');
+
+    return () => {
+      console.log('🧹 AuthContext: Cleaning up event listeners');
+      window.removeEventListener('authRequired', handleAuthRequired as EventListener);
+      window.removeEventListener('authSuccess', handleAuthSuccess);
+    };
+  }, []);
 
   const value: AuthContextType = {
     state,

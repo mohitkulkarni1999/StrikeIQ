@@ -10,9 +10,89 @@ from ...models.database import get_db
 from ...core.config import settings
 import logging
 from datetime import datetime
+import time
 
 router = APIRouter(prefix="/api/v1/options", tags=["options"])
 logger = logging.getLogger(__name__)
+
+# Cache for auth status (1 minute TTL)
+_auth_status_cache = {
+    'status': None,
+    'timestamp': 0,
+    'ttl': 60  # 1 minute
+}
+
+@router.get("/auth/status", response_model=Dict[str, Any])
+async def get_auth_status():
+    """Get authentication status with caching (1 minute TTL)"""
+    current_time = time.time()
+    
+    # Check if cache is still valid
+    if current_time - _auth_status_cache['timestamp'] < _auth_status_cache['ttl'] and _auth_status_cache['status'] is not None:
+        logger.info("Returning cached auth status")
+        return _auth_status_cache['status']
+    
+    try:
+        logger.info("Checking fresh auth status...")
+        
+        # Get access token (this will check with Upstox if needed)
+        from ...services.upstox_auth_service import get_upstox_auth_service
+        auth_service = get_upstox_auth_service()
+        token = await auth_service.get_valid_access_token()
+        
+        if token:
+            # Test token with a lightweight API call
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(
+                    'https://api.upstox.com/v3/market-quote/ltp',
+                    params={'instrument_key': 'NSE_INDEX|Nifty 50'},
+                    headers={'Authorization': f'Bearer {token}'}
+                )
+                
+                if response.status_code == 200:
+                    status = {
+                        'authenticated': True,
+                        'message': 'Token is valid',
+                        'timestamp': datetime.now().isoformat()
+                    }
+                else:
+                    status = {
+                        'session_type': 'AUTH_REQUIRED',
+                        'mode': 'AUTH',
+                        'message': 'Token validation failed',
+                        'timestamp': datetime.now().isoformat()
+                    }
+        else:
+            status = {
+                'session_type': 'AUTH_REQUIRED',
+                'mode': 'AUTH', 
+                'message': 'No access token available',
+                'timestamp': datetime.now().isoformat()
+            }
+        
+        # Cache the result
+        _auth_status_cache['status'] = status
+        _auth_status_cache['timestamp'] = current_time
+        
+        logger.info(f"Auth status updated: {status}")
+        return status
+        
+    except Exception as e:
+        logger.error(f"Auth status check failed: {e}")
+        error_status = {
+            'session_type': 'AUTH_REQUIRED',
+            'mode': 'AUTH',
+            'message': f'Auth check failed: {str(e)}',
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Cache error status for shorter time (30 seconds)
+        _auth_status_cache['status'] = error_status
+        _auth_status_cache['timestamp'] = current_time
+        _auth_status_cache['ttl'] = 30
+        
+        return error_status
 
 def get_option_chain_service():
     """Dependency injection for OptionChainService"""
