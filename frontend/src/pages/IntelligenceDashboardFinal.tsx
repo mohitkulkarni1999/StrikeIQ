@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import api from '../src/lib/api';
 import StructuralBanner from '../components/intelligence/StructuralBannerFinal';
 import ConvictionPanel from '../components/intelligence/ConvictionPanelFinal';
 import GammaPressurePanel from '../components/intelligence/GammaPressurePanelFinal';
@@ -49,6 +50,22 @@ const IntelligenceDashboard: React.FC = () => {
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
+        
+        // Handle authentication required
+        if (data.status === 'auth_required') {
+          console.warn('🔐 Authentication required - redirecting to auth screen');
+          
+          // Close WebSocket
+          ws.close();
+          
+          // Clear any stored auth data
+          localStorage.removeItem("upstox_auth")
+          sessionStorage.removeItem("upstox_auth")
+          
+          // Redirect to auth screen
+          window.location.href = "/auth"
+          return
+        }
         
         if (data.status === 'live_update') {
           setWsData(data);

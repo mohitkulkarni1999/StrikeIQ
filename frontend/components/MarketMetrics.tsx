@@ -1,18 +1,20 @@
-import { MarketData } from '../types/market';
-import { BarChart3, TrendingUp, Users, Activity } from 'lucide-react';
+import { BarChart3, TrendingUp, Activity } from 'lucide-react';
 
-interface MarketMetricsProps {
-  data: MarketData;
-  analytics?: {
-    total_call_oi: number;
-    total_put_oi: number;
-    pcr: number;
-    strongest_support: number;
-    strongest_resistance: number;
-  };
+interface AnalyticsData {
+  total_call_oi: number;
+  total_put_oi: number;
+  pcr: number;
+  strongest_support: number;
+  strongest_resistance: number;
 }
 
-export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
+interface MarketMetricsProps {
+  analytics: AnalyticsData;
+}
+
+export default function MarketMetrics({ analytics }: MarketMetricsProps) {
+  console.log('MarketMetrics render - analytics:', analytics);
+  
   // Compute real metrics from analytics
   const totalCallOI = analytics?.total_call_oi ?? 0;
   const totalPutOI = analytics?.total_put_oi ?? 0;
@@ -32,7 +34,7 @@ export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
   // Safe VWAP calculation (no division by zero)
   const vwapChange =
     totalOI > 0
-      ? ((data.spot_price - totalOI) / totalOI) * 100
+      ? ((0 - totalOI) / totalOI) * 100  // Removed data.spot_price reference
       : 0;
 
   const metrics = [
@@ -49,7 +51,7 @@ export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
       value: totalCallOI.toLocaleString("en-IN"),
       change: "Resistance @ " + (analytics?.strongest_resistance ?? "-"),
       changeType: "negative" as const,
-      icon: <TrendingUp className="w-5 h-5" />,
+      icon: <BarChart3 className="w-5 h-5" />,
       color: "text-danger-500"
     },
     {
@@ -57,7 +59,7 @@ export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
       value: totalPutOI.toLocaleString("en-IN"),
       change: "Support @ " + (analytics?.strongest_support ?? "-"),
       changeType: "positive" as const,
-      icon: <Activity className="w-5 h-5" />,
+      icon: <BarChart3 className="w-5 h-5" />,
       color: "text-success-500"
     }
   ];
@@ -98,9 +100,9 @@ export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
       </div>
 
       {/* Market Sentiment */}
-      <div className="glass-morphism rounded-lg p-4 mb-6">
+      <div className="glass-morphism rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <h4 className="text-sm font-medium">Market Sentiment</h4>
+          <h4 className="text-sm font-medium mb-3">Market Sentiment</h4>
           <div className={`px-3 py-1 rounded-full ${
             sentiment === 'Bullish' 
               ? 'bg-success-500/20 text-success-500' 
@@ -113,36 +115,23 @@ export default function MarketMetrics({ data, analytics }: MarketMetricsProps) {
         </div>
         
         <div className="space-y-2">
-          <div className="flex justify-between text-sm">
+          <div className="flex justify-between text-sm mb-1">
             <span className="text-muted-foreground">Put/Call Ratio</span>
             <span className="font-medium">{pcr.toFixed(2)}</span>
           </div>
-          <div className="flex justify-between text-sm">
-            <span className="text-muted-foreground">Bias Strength</span>
-            <span className={`font-medium ${
-              pcr > 1 ? 'text-success-500' : 'text-danger-500'
-            }`}>
-              {biasStrength.toFixed(1)}%
-            </span>
+          <div className="h-2 rounded-full bg-gray-500/20">
+            <div
+              className="h-2 rounded-full bg-primary-500"
+              style={{ width: `${biasStrength}%` }}
+            ></div>
           </div>
-        </div>
-      </div>
-
-      {/* Signal Strength */}
-      <div className="glass-morphism rounded-lg p-4">
-        <h4 className="text-sm font-medium mb-3">Signal Strength</h4>
-        <div className="space-y-3">
-          <div>
-            <div className="flex justify-between text-sm mb-1">
-              <span className="text-muted-foreground">Market Bias</span>
-              <span className="font-medium">{sentiment}</span>
-            </div>
-            <div className="h-2 rounded-full bg-gray-500/20">
-              <div
-                className="h-2 rounded-full bg-primary-500"
-                style={{ width: `${biasStrength}%` }}
-              ></div>
-            </div>
+          <div className="flex justify-between text-sm">
+            <span className="text-muted-foreground">Market Bias</span>
+            <span className={`font-medium ${
+              sentiment === 'Bullish' ? 'text-success-500' : 'text-danger-500'
+            }`}>
+              {sentiment}
+            </span>
           </div>
         </div>
       </div>

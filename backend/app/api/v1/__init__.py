@@ -8,6 +8,8 @@ from .options import router as options_router
 from .system import router as system_router
 from .predictions import router as predictions_router
 from .debug import router as debug_router
+from .intelligence import router as intelligence_router
+from .live_ws import router as live_ws_router
 
 __all__ = [
     "auth_router",
@@ -15,5 +17,7 @@ __all__ = [
     "options_router",
     "system_router",
     "predictions_router",
-    "debug_router"
+    "debug_router",
+    "intelligence_router",
+    "live_ws_router"
 ]

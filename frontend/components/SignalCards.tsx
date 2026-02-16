@@ -1,76 +1,100 @@
-import { RealTimeSignals } from '../types/market';
+import React from 'react';
 import { AlertCircle, TrendingUp, TrendingDown, Target } from 'lucide-react';
 
 interface SignalCardsProps {
-  signals: RealTimeSignals;
+  intelligence?: {
+    bias: {
+      score: number;
+      label: string;
+      strength: number;
+      direction: string;
+      confidence: number;
+      signal: string;
+    };
+    probability?: {
+      expected_move: number;
+      upper_1sd: number;
+      lower_1sd: number;
+      upper_2sd: number;
+      lower_2sd: number;
+      breach_probability: number;
+      range_hold_probability: number;
+      volatility_state: string;
+    };
+    liquidity: {
+      total_oi: number;
+      oi_change_24h: number;
+      concentration: number;
+      depth_score: number;
+      flow_direction: string;
+    };
+  };
 }
 
-export default function SignalCards({ signals }: SignalCardsProps) {
-  if (!signals) {
+export default function SignalCards({ intelligence }: SignalCardsProps) {
+  console.log('🔍 SignalCards - Received intelligence:', intelligence);
+  
+  if (!intelligence) {
     return (
-      <div className="glass-morphism rounded-xl p-6">
+      <div className="glass-morphism rounded-xl p-6 border border-white/10">
         <div className="text-center text-muted-foreground">
-          <p>No signal data available</p>
+          <AlertCircle className="w-8 h-8 mx-auto mb-2 opacity-50" />
+          <p>Signal data unavailable</p>
         </div>
       </div>
     );
   }
 
-  const { bias_signal, expected_move_signal, smart_money_signal, overall_signal } = signals || {
-    bias_signal: { action: 'HOLD', strength: 'WEAK', confidence: 0 },
-    expected_move_signal: { signal: 'NEUTRAL', action: 'HOLD', distance: 0 },
-    smart_money_signal: { signal: 'NEUTRAL', action: 'HOLD', activities: [] },
-    overall_signal: { action: 'HOLD', strength: 'WEAK', confidence: 0, reasoning: 'No signals available' }
-  };
+  const { bias, probability, liquidity } = intelligence;
 
   const signalCards = [
     {
       title: 'Bias Signal',
-      signal: bias_signal.action,
-      strength: bias_signal.strength,
-      confidence: bias_signal.confidence,
-      icon: bias_signal.action === 'BUY' ? <TrendingUp className="w-6 h-6" /> : 
-             bias_signal.action === 'SELL' ? <TrendingDown className="w-6 h-6" /> : 
+      signal: bias?.signal || 'NEUTRAL',
+      strength: bias?.strength || 'UNKNOWN',
+      confidence: bias?.confidence || 0,
+      icon: bias?.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
+             bias?.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
              <Target className="w-6 h-6" />,
-      color: bias_signal.action === 'BUY' ? 'success' : 
-             bias_signal.action === 'SELL' ? 'danger' : 'warning',
-      description: `Market bias indicates ${bias_signal.action.toLowerCase()} sentiment with ${bias_signal.strength.toLowerCase()} conviction.`
+      color: bias?.label?.toUpperCase() === 'BULLISH' ? 'success' : 
+             bias?.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
+      description: `Market bias indicates ${bias?.label?.toString().toLowerCase() || 'neutral'} sentiment with ${bias?.strength?.toString().toLowerCase() || 'unknown'} conviction.`
     },
     {
       title: 'Expected Move Signal',
-      signal: expected_move_signal.signal,
-      strength: expected_move_signal.action,
-      confidence: (1 - expected_move_signal.distance) * 100,
-      icon: expected_move_signal.signal === 'OVERBOUGHT' ? <TrendingUp className="w-6 h-6" /> : 
-             expected_move_signal.signal === 'OVERSOLD' ? <TrendingDown className="w-6 h-6" /> : 
+      signal: probability?.volatility_state?.toUpperCase() || 'NEUTRAL',
+      strength: probability?.expected_move > 0 ? 'MODERATE' : 'WEAK',
+      confidence: probability?.range_hold_probability || 0,
+      icon: probability?.volatility_state === 'overpriced' ? <TrendingUp className="w-6 h-6" /> : 
+             probability?.volatility_state === 'underpriced' ? <TrendingDown className="w-6 h-6" /> : 
              <Target className="w-6 h-6" />,
-      color: expected_move_signal.signal === 'OVERBOUGHT' ? 'danger' : 
-             expected_move_signal.signal === 'OVERSOLD' ? 'success' : 'warning',
-      description: `Price is in ${expected_move_signal.signal.toLowerCase()} zone. Consider ${expected_move_signal.action.toLowerCase()} position.`
+      color: probability?.volatility_state === 'overpriced' ? 'danger' : 
+             probability?.volatility_state === 'underpriced' ? 'success' : 'warning',
+      description: `Expected move of ±${probability?.expected_move?.toFixed(2) || '0.00'} indicates ${probability?.volatility_state || 'neutral'} pricing.`
     },
     {
-      title: 'Smart Money Signal',
-      signal: smart_money_signal.signal,
-      strength: smart_money_signal.action,
-      confidence: smart_money_signal.activities ? smart_money_signal.activities.length * 20 : 0,
-      icon: smart_money_signal.signal.includes('BULLISH') ? <TrendingUp className="w-6 h-6" /> : 
-             smart_money_signal.signal.includes('BEARISH') ? <TrendingDown className="w-6 h-6" /> : 
+      title: 'Liquidity Signal',
+      signal: liquidity?.flow_direction?.toUpperCase() || 'NEUTRAL',
+      strength: liquidity?.depth_score > 0.7 ? 'STRONG' : liquidity?.depth_score > 0.4 ? 'MODERATE' : 'WEAK',
+      confidence: liquidity?.concentration ? (1 - liquidity.concentration) * 100 : 0,
+      icon: liquidity?.flow_direction?.includes('BULLISH') ? <TrendingUp className="w-6 h-6" /> : 
+             liquidity?.flow_direction?.includes('BEARISH') ? <TrendingDown className="w-6 h-6" /> : 
              <AlertCircle className="w-6 h-6" />,
-      color: smart_money_signal.signal.includes('BULLISH') ? 'success' : 
-             smart_money_signal.signal.includes('BEARISH') ? 'danger' : 'warning',
-      description: `Institutional activity shows ${smart_money_signal.signal.toLowerCase().replace('_', ' ')} pattern.`
+      color: liquidity?.flow_direction?.includes('BULLISH') ? 'success' : 
+             liquidity?.flow_direction?.includes('BEARISH') ? 'danger' : 'warning',
+      description: `Liquidity depth score of ${(liquidity?.depth_score * 100).toFixed(1)}% with ${liquidity?.flow_direction?.toLowerCase() || 'neutral'} flow.`
     },
     {
       title: 'Overall Signal',
-      signal: overall_signal.action,
-      strength: overall_signal.strength,
-      confidence: overall_signal.confidence,
-      icon: overall_signal.action === 'BUY' ? <TrendingUp className="w-6 h-6" /> : 
-             overall_signal.action === 'SELL' ? <TrendingDown className="w-6 h-6" /> : 
+      signal: bias?.signal || 'NEUTRAL',
+      strength: bias?.strength || 'UNKNOWN',
+      confidence: bias?.confidence || 0,
+      icon: bias?.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
+             bias?.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
              <Target className="w-6 h-6" />,
-      color: overall_signal.action === 'BUY' ? 'success' : 
-             overall_signal.action === 'SELL' ? 'danger' : 'warning',
-      description: overall_signal.reasoning
+      color: bias?.label?.toUpperCase() === 'BULLISH' ? 'success' : 
+             bias?.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
+      description: `Overall market bias is ${bias?.label?.toLowerCase() || 'neutral'} with ${bias?.confidence?.toFixed(1) || '0.0'}% confidence.`
     }
   ];
 
@@ -104,7 +128,7 @@ export default function SignalCards({ signals }: SignalCardsProps) {
         const colors = getColorClasses(card.color);
         
         return (
-          <div key={index} className="signal-card">
+          <div key={index} className="glass-morphism rounded-xl p-6 border border-white/10">
             <div className="flex items-start justify-between mb-4">
               <div>
                 <h4 className="text-sm font-medium text-muted-foreground mb-1">
@@ -123,9 +147,9 @@ export default function SignalCards({ signals }: SignalCardsProps) {
               <div>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-muted-foreground">Strength</span>
-                  <span className="font-medium capitalize">{card.strength.toLowerCase()}</span>
+                  <span className="font-medium capitalize">{typeof card.strength === 'string' ? card.strength.toLowerCase() : card.strength.toString()}</span>
                 </div>
-                <div className="w-full bg-muted rounded-full h-2">
+                <div className="w-full bg-black/30 rounded-full h-2">
                   <div
                     className={`h-2 rounded-full transition-all duration-500 ${
                       card.strength === 'STRONG' ? 'w-4/5' :
@@ -140,7 +164,7 @@ export default function SignalCards({ signals }: SignalCardsProps) {
                   <span className="text-muted-foreground">Confidence</span>
                   <span className="font-medium">{card.confidence.toFixed(0)}%</span>
                 </div>
-                <div className="w-full bg-muted rounded-full h-2">
+                <div className="w-full bg-black/30 rounded-full h-2">
                   <div
                     className={`h-2 rounded-full transition-all duration-500 ${colors.iconBg}`}
                     style={{ width: `${Math.min(card.confidence, 100)}%` }}

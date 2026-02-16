@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from ...core.config import settings
 from .types import InstrumentInfo, APIResponseError, AuthenticationError, TokenExpiredError
+from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +72,13 @@ class UpstoxClient:
         self._expiry_cache_ttl = 3600  # 1 hour for expiries
         self._contracts_cache_ttl = 1800  # 30 minutes for contracts
         
+        # Instrument mapping for expiry fetching
+        self.INSTRUMENT_MAP = {
+            "NIFTY": "NSE_INDEX|Nifty 50",
+            "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+            "FINNIFTY": "NSE_INDEX|Nifty Fin Service"
+        }
+        
         self._initialized = True
     
     def _get_cache_key(self, symbol: str, data_type: str) -> str:
@@ -105,7 +113,8 @@ class UpstoxClient:
             self._cache_timestamps[cache_key] = time.time()
             
         except Exception as e:
-            logger.error(f"Cache set error: {e}")
+            logger.exception("Cache set error")
+            # Don't break the flow for cache errors
     
     def _get_cache(self, cache_key: str) -> Optional[Any]:
         """Get cache data"""
@@ -129,7 +138,7 @@ class UpstoxClient:
                     return None
             
         except Exception as e:
-            logger.error(f"Cache get error: {e}")
+            logger.exception("Cache get error")
             return None
     
     def _is_cache_valid(self, cache_key: str) -> bool:
@@ -163,7 +172,7 @@ class UpstoxClient:
                     return None
             
         except Exception as e:
-            logger.error(f"Cache get error: {e}")
+            logger.exception("Cache get error")
             return None
     
     async def _get_client(self, access_token: str, version: str = "v3") -> httpx.AsyncClient:
@@ -273,8 +282,11 @@ class UpstoxClient:
             logger.info(f"Real expiries for {symbol}: {expiries}")
             return expiries
             
+        except HTTPException as e:
+            # Preserve original status (401, 403, etc.)
+            raise e
         except Exception as e:
-            logger.error(f"Error fetching option expiries for {symbol}: {e}")
+            logger.exception("Unexpected internal error fetching option expiries")
             # Return fallback expiries on error - use current month logic
             from datetime import datetime, timedelta
             today = datetime.now()
@@ -320,7 +332,11 @@ class UpstoxClient:
             logger.info(f"=== INVESTIGATION: Trying without URL encoding ===")
             logger.info(f"=== INVESTIGATION: HTTP Status: {contracts_response.status_code} ===")
             
+            # Debug logging to confirm status
+            print(f"DEBUG: Upstox API returning status: {contracts_response.status_code}")
+            
             if contracts_response.status_code == 401:
+                print(f"DEBUG: Upstox 401 detected - raising TokenExpiredError")
                 raise TokenExpiredError("Access token expired")
             elif contracts_response.status_code == 404:
                 logger.error(f"Upstox 404 error for option contracts: {contracts_response.text}")
@@ -333,10 +349,15 @@ class UpstoxClient:
                 contracts_data = contracts_response.json()
                 logger.info(f"=== INVESTIGATION: Option chain raw response type: {type(contracts_data)} ===")
                 logger.info(f"=== INVESTIGATION: Option chain raw response: {str(contracts_data)[:500]} ===")
+            except HTTPException as e:
+                # Preserve original status (401, 403, etc.)
+                raise e
             except Exception as e:
-                logger.error(f"=== INVESTIGATION: Error parsing option chain JSON: {e}")
-                logger.error(f"=== INVESTIGATION: Response text: {contracts_response.text}")
-                raise APIResponseError(f"Failed to parse option chain response: {e}")
+                logger.exception("Unexpected internal error parsing JSON")
+                raise HTTPException(
+                    status_code=500,
+                    detail="Internal server error"
+                )
             logger.info(f"=== INVESTIGATION: Raw JSON response type: {type(contracts_data)} ===")
             logger.info(f"=== INVESTIGATION: Raw JSON response keys: {list(contracts_data.keys()) if isinstance(contracts_data, dict) else 'Not a dict'} ===")
             
@@ -414,13 +435,19 @@ class UpstoxClient:
             raise APIResponseError(f"Network error: {e}")
         except TokenExpiredError as e:
             logger.error(f"Token expired fetching option chain for {instrument_key}: {e}")
-            raise APIResponseError(f"Token expired: {e}")
+            raise HTTPException(status_code=401, detail="Upstox authentication required")
         except APIResponseError as e:
             logger.error(f"API error fetching option chain for {instrument_key}: {e}")
             raise
+        except HTTPException as e:
+            # Preserve original status (401, 403, etc.)
+            raise e
         except Exception as e:
-            logger.error(f"Unexpected error fetching option chain: {e}")
-            raise APIResponseError(f"Unexpected error: {e}")
+            logger.exception("Unexpected internal error fetching option chain")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
 
     async def get_option_greeks(self, access_token: str, instrument_key: str) -> Dict[str, Any]:
         """Get option Greeks from Upstox API"""
@@ -463,9 +490,15 @@ class UpstoxClient:
         except APIResponseError as e:
             logger.error(f"API error fetching option Greeks for {instrument_key}: {e}")
             raise
+        except HTTPException as e:
+            # Preserve original status (401, 403, etc.)
+            raise e
         except Exception as e:
-            logger.error(f"Unexpected error fetching option Greeks: {e}")
-            raise APIResponseError(f"Unexpected error: {e}")
+            logger.exception("Unexpected internal error fetching option Greeks")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
     
     async def get_market_quote(self, access_token: str, instrument_key: str) -> Dict[str, Any]:
         """Get market quote from Upstox API - WORKING ENDPOINT"""
@@ -509,12 +542,18 @@ class UpstoxClient:
         except TokenExpiredError as e:
             logger.error(f"Token expired fetching quote for {instrument_key}: {e}")
             raise  # Re-raise TokenExpiredError without changing it
+        except HTTPException as e:
+            # Preserve original status (401, 403, etc.)
+            raise e
         except APIResponseError as e:
             logger.error(f"API error fetching quote for {instrument_key}: {e}")
             raise  # Re-raise APIResponseError without changing it
         except Exception as e:
-            logger.error(f"Unexpected error fetching quote for {instrument_key}: {e}")
-            raise APIResponseError(f"Unexpected error: {e}")
+            logger.exception("Unexpected internal error fetching quote")
+            raise HTTPException(
+                status_code=500,
+                detail="Internal server error"
+            )
 
     async def _log_final_response(self, response_data: Dict[str, Any]) -> None:
         """Log final backend response for forensic audit"""

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, Query
+from fastapi import FastAPI, HTTPException, Depends, Query, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
 import uvicorn
+import os
+import sys
 
 from app.core.config import settings
 from app.models.database import get_db
@@ -18,7 +20,9 @@ from app.api.v1 import (
     options_router,
     system_router,
     predictions_router,
-    debug_router
+    debug_router,
+    intelligence_router,
+    live_ws_router
 )
 
 # Configure logging with file output
@@ -90,21 +94,41 @@ app.include_router(options_router)
 app.include_router(system_router)
 app.include_router(predictions_router)
 app.include_router(debug_router)
+app.include_router(intelligence_router)
+app.include_router(live_ws_router)
 
-# CORS middleware
+# CORS middleware - Fixed for WebSocket support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_HOSTS,
+    allow_origins=["http://localhost:3000", "ws://localhost:3000", "http://localhost:8000", "ws://localhost:8000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Print all registered routes for debugging
+# 🔍 GLOBAL HTTP REQUEST LOGGER FOR AUDIT
+@app.middleware("http")
+async def log_all_http_requests(request, call_next):
+    print(f"🌐 REST HIT: {request.url.path}")
+    print(f"🌐 REST METHOD: {request.method}")
+    print(f"🌐 REST TIMESTAMP: {datetime.now().isoformat()}")
+    
+    response = await call_next(request)
+    
+    print(f"🌐 REST STATUS: {response.status_code}")
+    print(f"🌐 REST COMPLETED: {request.url.path}")
+    
+    return response
 logger.info("=== REGISTERED ROUTES ===")
 for route in app.routes:
     if hasattr(route, 'path'):
-        logger.info(f"Route: {route.path} | Methods: {getattr(route, 'methods', 'N/A')}")
+        route_type = getattr(route, 'methods', 'N/A')
+        logger.info(f"Route: {route.path} | Methods: {route_type} | Type: {type(route).__name__}")
+        
+        # Specifically check for WebSocket routes
+        if hasattr(route, 'path') and 'ws' in route.path:
+            logger.info(f"🔌 WEBSOCKET ROUTE FOUND: {route.path}")
+            
 logger.info("=== END ROUTES ===")
 
 
@@ -112,6 +136,27 @@ logger.info("=== END ROUTES ===")
 async def root():
     return {"message": "StrikeIQ API is running", "version": "2.0.0"}
 
+
+# Add simple WebSocket test directly to main app
+@app.websocket("/ws/simple-test")
+async def simple_websocket_test(websocket: WebSocket):
+    """Simple WebSocket test endpoint"""
+    print(f"🔌 WebSocket connection attempt to /ws/simple-test")
+    try:
+        await websocket.accept()
+        print(f"✅ WebSocket accepted for /ws/simple-test")
+        await websocket.send_text("Hello from simple WebSocket!")
+        print(f"📨 Message sent to /ws/simple-test")
+        await websocket.close()
+        print(f"🔌 WebSocket closed for /ws/simple-test")
+    except Exception as e:
+        print(f"❌ WebSocket error in /ws/simple-test: {e}")
+        await websocket.close()
+
+@app.get("/ws-test")
+async def ws_test():
+    """Test endpoint to verify server is running"""
+    return {"message": "WebSocket test endpoint working", "timestamp": datetime.now().isoformat()}
 
 @app.get("/health")
 async def health_check():
@@ -164,8 +209,8 @@ async def get_upstox_auth_url():
 async def upstox_auth_callback(code: str = Query(None)):
     """Handle Upstox OAuth callback"""
     try:
-        from app.services.upstox_auth_service import UpstoxAuthService
-        auth_service = UpstoxAuthService()
+        from app.services.upstox_auth_service import get_upstox_auth_service
+        auth_service = get_upstox_auth_service()
         
         # Debug logging
         logger.info(f"Received callback with code: {code}")

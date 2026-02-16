@@ -137,23 +137,23 @@ class MarketDashboardService:
         Tests token validity with Upstox API.
         """
 
-        logger.info("🔍 Starting authentication check...")
+        logger.info("Starting authentication check...")
 
         try:
-            logger.info("📝 Getting valid access token...")
+            logger.info("Getting valid access token...")
             token = await self.auth_service.get_valid_access_token()
-            logger.info(f"📝 Token retrieved: {token[:20] if token else 'None'}...")
+            logger.info(f"Token retrieved: {token[:20] if token else 'None'}...")
 
             if not token:
-                logger.warning("❌ No valid token available")
+                logger.warning("No valid token available")
                 return {"authenticated": False, "token": None}
 
-            logger.info("🌐 Testing token with Upstox API...")
+            logger.info("Testing token with Upstox API...")
 
             # Test token with Upstox API (same as auth status endpoint)
             try:
                 import httpx
-                logger.info(f"📡 Making API call to Upstox with token: {token[:20]}...")
+                logger.info(f"Making API call to Upstox with token: {token[:20]}...")
                 async with httpx.AsyncClient(timeout=5.0) as client:
                     response = await client.get(
                         'https://api.upstox.com/v3/market-quote/ltp',
@@ -161,20 +161,20 @@ class MarketDashboardService:
                         headers={'Authorization': f'Bearer {token}'}
                     )
 
-                    logger.info(f"📡 Upstox API response status: {response.status_code}")
+                    logger.info(f"Upstox API response status: {response.status_code}")
 
                     if response.status_code == 200:
-                        logger.info("✅ Authentication successful - token validated with Upstox")
+                        logger.info("Authentication successful - token validated with Upstox")
                         return {"authenticated": True, "token": token}
                     else:
-                        logger.warning(f"❌ Token validation failed with Upstox: {response.status_code} - {response.text}")
+                        logger.warning(f"Token validation failed with Upstox: {response.status_code} - {response.text}")
                         return {"authenticated": False, "token": None}
             except Exception as e:
-                logger.warning(f"❌ Token validation error: {e}")
+                logger.warning(f"Token validation error: {e}")
                 return {"authenticated": False, "token": None}
 
         except Exception:
-            logger.exception("❌ Authentication check crashed")
+            logger.exception("Authentication check crashed")
             return {"authenticated": False, "token": None}
     
     def _create_auth_required_response(self) -> Dict[str, Any]:

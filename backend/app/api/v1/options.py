@@ -101,8 +101,8 @@ def get_option_chain_service():
     """Dependency injection for OptionChainService"""
     logger.info("=== INVESTIGATION: Creating OptionChainService ===")
     try:
-        from app.services.upstox_auth_service import UpstoxAuthService
-        auth_service = UpstoxAuthService()
+        from ...services.upstox_auth_service import get_upstox_auth_service
+        auth_service = get_upstox_auth_service()
         logger.info(f"=== INVESTIGATION: Created auth_service: {auth_service} (type: {type(auth_service)}) ===")
         service = OptionChainService(auth_service)
         logger.info(f"=== INVESTIGATION: Created service: {service} (type: {type(service)}) ===")
@@ -138,13 +138,10 @@ async def get_option_contracts(
     db: Session = Depends(get_db)
 ):
     """Get available option contracts/expiries for a symbol"""
-    logger.info(f"=== INVESTIGATION: Function called with symbol={symbol} (type: {type(symbol)}) ===")
-    logger.info(f"=== INVESTIGATION: Service={service} (type: {type(service)}) ===")
-    logger.info(f"=== INVESTIGATION: DB={db} (type: {type(db)}) ===")
+    # 🔍 AUDIT: Contract endpoint re-enabled for expiry metadata (cached)
+    logger.info(f"=== AUDIT: Contract endpoint called for {symbol} ===")
     
     try:
-        logger.info(f"=== INVESTIGATION: API request: Option contracts for {symbol} ===")
-        
         # Validate symbol
         if symbol.upper() not in ["NIFTY", "BANKNIFTY"]:
             raise HTTPException(status_code=400, detail="Invalid symbol. Must be NIFTY or BANKNIFTY")
@@ -159,112 +156,71 @@ async def get_option_contracts(
         
         # Get instrument key for options (NSE_FO namespace)
         try:
-            logger.info(f"=== INVESTIGATION: Service object: {service} (type: {type(service)}) ===")
-            logger.info(f"=== INVESTIGATION: Symbol: {symbol} (type: {type(symbol)}) ===")
+            logger.info(f"=== AUDIT: Getting instrument key for {symbol} ===")
             instrument_key = await service._get_instrument_key(symbol)
-            logger.info(f"=== INVESTIGATION: Using instrument_key: {instrument_key} (type: {type(instrument_key)}) ===")
-        except APIResponseError as e:
-            logger.error(f"=== INVESTIGATION: APIResponseError getting instrument key: {e} ===")
-            raise HTTPException(status_code=500, detail=f"API error: {e}")
         except Exception as e:
-            logger.error(f"=== INVESTIGATION: Error getting instrument key: {e} ===")
-            import traceback
-            logger.error(f"=== INVESTIGATION: Traceback: {traceback.format_exc()} ===")
+            logger.error(f"=== AUDIT: Error getting instrument key: {e} ===")
             raise HTTPException(status_code=500, detail=f"Failed to get instrument key: {e}")
         
         # Fetch option contracts using Upstox client directly
         try:
-            # Use the exact same format as the working curl
             import urllib.parse
             
             # Manually construct the URL with proper encoding
             encoded_key = urllib.parse.quote(instrument_key, safe='')
             url = f"https://api.upstox.com/v2/option/contract?instrument_key={encoded_key}"
             
-            logger.info(f"=== INVESTIGATION: Original key: {instrument_key} ===")
-            logger.info(f"=== INVESTIGATION: Encoded key: {encoded_key} ===")
-            logger.info(f"=== INVESTIGATION: Full URL: {url} ===")
+            # Make request
+            response = await service.client._make_request('get', url, access_token=token)
             
-            # Make request without params (already in URL)
-            response = await service.client._make_request(
-                'get',
-                url,
-                access_token=token
-            )
+            if response.status_code != 200:
+                logger.error(f"=== AUDIT: API returned status {response.status_code} ===")
+                raise HTTPException(status_code=500, detail="Failed to fetch contracts")
             
-            logger.info(f"=== INVESTIGATION: Response status: {response.status_code} ===")
-            
-        except Exception as e:
-            logger.error(f"=== INVESTIGATION: Error making request: {e} ===")
-            raise HTTPException(status_code=500, detail=f"Failed to make request: {e}")
-        
-        logger.info(f"=== INVESTIGATION: Contracts HTTP Status: {response.status_code} ===")
-        
-        if response.status_code == 401:
-            raise HTTPException(status_code=401, detail="Access token expired")
-        elif response.status_code != 200:
-            logger.error(f"Failed to fetch option contracts: {response.status_code} - {response.text}")
-            raise HTTPException(status_code=500, detail=f"Failed to fetch option contracts: {response.text}")
-        
-        try:
             data = response.json()
-            logger.info(f"=== INVESTIGATION: Contracts data type: {type(data)} ===")
-            logger.info(f"=== INVESTIGATION: Raw response: {str(data)[:500]} ===")  # Limit to first 500 chars
             
             # Handle different response formats
             if isinstance(data, dict) and "data" in data:
                 contracts = data["data"]
             elif isinstance(data, list):
                 contracts = data
-            elif isinstance(data, dict) and "status" in data and data.get("status") == "error":
-                # Handle error response
-                logger.error(f"=== INVESTIGATION: API returned error: {data} ===")
-                contracts = []
             else:
-                logger.error(f"=== INVESTIGATION: Unexpected response format: {type(data)} - {str(data)[:200]} ===")
+                logger.error(f"=== AUDIT: Unexpected response format: {type(data)} ===")
                 contracts = []
             
-            logger.info(f"=== INVESTIGATION: Contracts type: {type(contracts)}, length: {len(contracts) if isinstance(contracts, list) else 'Not a list'} ===")
-            
-        except Exception as e:
-            logger.error(f"=== INVESTIGATION: Error parsing JSON: {e} ===")
-            raise HTTPException(status_code=500, detail=f"Failed to parse response: {e}")
-        
-        # Extract unique expiry dates from real contracts
-        expiries_set = set()
-        try:
+            # Extract unique expiry dates
+            expiries_set = set()
             if isinstance(contracts, list):
                 for contract in contracts:
                     if isinstance(contract, dict):
                         expiry = contract.get('expiry')
                         if expiry:
                             expiries_set.add(expiry)
-            else:
-                logger.error(f"=== INVESTIGATION: Contracts is not a list: {type(contracts)} ===")
+            
+            # Convert set to sorted list
+            expiries = sorted(list(expiries_set))
+            
+            logger.info(f"=== AUDIT: Returning {len(expiries)} expiries for {symbol} ===")
+            
+            return {
+                "status": "success",
+                "data": expiries
+            }
+            
         except Exception as e:
-            logger.error(f"=== INVESTIGATION: Error extracting expiries: {e} ===")
-            logger.error(f"=== INVESTIGATION: Contracts data: {contracts} ===")
-        
-        # Convert to sorted list
-        expiries = sorted(list(expiries_set))
-        logger.info(f"=== INVESTIGATION: Extracted {len(expiries)} unique expiries: {expiries} ===")
-        
-        return {
-            "status": "success",
-            "data": expiries,
-            "symbol": symbol.upper(),
-            "timestamp": datetime.now().isoformat(),
-            "total_expiries": len(expiries)
-        }
-        
-    except HTTPException:
-        raise
+            logger.error(f"=== AUDIT: Error fetching contracts for {symbol}: {e} ===")
+            raise HTTPException(status_code=500, detail=str(e))
+            
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        print(f"🔍 DEBUG: HTTPException caught in contract API: {e.status_code}")
+        logger.info(f"Returning status code: {e.status_code}")
+        logger.error(f"HTTPException in contract API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"=== INVESTIGATION: Unexpected error fetching option contracts for {symbol}: {e}")
-        logger.error(f"=== INVESTIGATION: Error type: {type(e)} ===")
-        import traceback
-        logger.error(f"=== INVESTIGATION: Traceback: {traceback.format_exc()} ===")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🔍 DEBUG: Generic exception caught in contract API: {e}")
+        logger.exception("Unexpected internal error in contract API")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/chain/{symbol}", response_model=Dict[str, Any])
 async def get_option_chain(
@@ -302,12 +258,20 @@ async def get_option_chain(
         
         return {
             "status": "success",
+            "source": "rest",
             "data": chain_data
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        print(f"🔍 DEBUG: HTTPException caught in v1 options API: {e.status_code}")
+        logger.info(f"Returning status code: {e.status_code}")
+        logger.error(f"HTTPException in option chain API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in option chain API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🔍 DEBUG: Generic exception caught in v1 options API: {e}")
+        logger.exception("Unexpected internal error in option chain API")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/oi-analysis/{symbol}", response_model=Dict[str, Any])
 async def get_oi_analysis(
@@ -337,9 +301,16 @@ async def get_oi_analysis(
             "total_strikes": analysis.get("total_strikes", 0)
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        print(f"🔍 DEBUG: HTTPException caught in OI analysis API: {e.status_code}")
+        logger.info(f"Returning status code: {e.status_code}")
+        logger.error(f"HTTPException in OI analysis API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in OI analysis API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🔍 DEBUG: Generic exception caught in OI analysis API: {e}")
+        logger.exception("Unexpected internal error in OI analysis API")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/greeks/{symbol}", response_model=Dict[str, Any])
 async def get_greeks(
@@ -403,9 +374,16 @@ async def get_greeks(
             "timestamp": datetime.now().isoformat()
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        print(f"🔍 DEBUG: HTTPException caught in Greeks API: {e.status_code}")
+        logger.info(f"Returning status code: {e.status_code}")
+        logger.error(f"HTTPException in Greeks API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in Greeks API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🔍 DEBUG: Generic exception caught in Greeks API: {e}")
+        logger.exception("Unexpected internal error in Greeks API")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/smart-money/{symbol}", response_model=Dict[str, Any])
 async def get_smart_money_signal(

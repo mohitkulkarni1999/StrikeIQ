@@ -14,6 +14,9 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Global singleton instance
+_auth_service_instance = None
+
 class TokenExpiredError(Exception):
     """Token has expired"""
     pass
@@ -161,6 +164,7 @@ class UpstoxAuthService:
     def _load_credentials(self) -> Optional[UpstoxCredentials]:
         """Load credentials securely"""
         if not os.path.exists(self._credentials_file):
+            logger.info("No credentials file found")
             return None
         
         try:
@@ -228,43 +232,46 @@ class UpstoxAuthService:
             }
             
             # SECURITY: Rate limit check before making request
-            client_ip = "127.0.0.1"  # Would get from request in real implementation
+            client_ip = self._get_client_ip(request)
             
             if not self._check_rate_limit(client_ip):
                 logger.warning(f"Rate limit check failed for IP: {client_ip}")
                 # Continue with request but log warning
             else:
-                logger.warning(f"Rate limit reached for IP: {client_ip}")
-                raise Exception("Rate limit exceeded")
+                logger.info(f"Making refresh request from IP: {client_ip}")
             
-            async with httpx.AsyncClient() as client:
-                response = await client.post(url, headers=headers, data=data)
-                response.raise_for_status()
-                
-                token_data = response.json()
-                
-                # SECURITY: Validate response structure
-                if not all(key in token_data for key in ["access_token", "refresh_token", "expires_in"]):
-                    logger.error("Invalid token response structure")
-                    raise Exception("Invalid token response from Upstox")
-                
-                # SECURITY: Validate token values
-                if not token_data.get("access_token") or not token_data.get("refresh_token"):
-                    logger.error("Invalid token values in response")
-                    raise Exception("Invalid token values in response")
-                
-                credentials = UpstoxCredentials(
-                    token_data.get("access_token"),
-                    token_data.get("refresh_token"),
-                    token_data.get("expires_in") or 3600
-                )
-                
-                # SECURITY: Store new credentials securely
-                self._store_credentials(credentials)
-                self._credentials = credentials
-                
-                logger.info("Token refreshed successfully")
-                return credentials.access_token
+            # SECURITY: Log refresh attempt (without sensitive data)
+            logger.info(f"Refresh token request - client_id: {settings.UPSTOX_API_KEY[:8]}..., redirect_uri: {settings.REDIRECT_URI}")
+            
+            # SECURITY: Use refresh_token as grant_type
+            data = {
+                "refresh_token": self._credentials.refresh_token,
+                "client_id": settings.UPSTOX_API_KEY,
+                "client_secret": settings.UPSTOX_API_SECRET,
+                "redirect_uri": settings.REDIRECT_URI,
+                "grant_type": "refresh_token"
+            }
+            
+            response = httpx.post(url, headers=headers, data=data)
+            response.raise_for_status()
+            
+            token_data = response.json()
+            if not all(key in token_data for key in ["access_token", "expires_in"]):
+                logger.error("Invalid token values in response")
+                raise Exception("Invalid token values in response")
+            
+            credentials = UpstoxCredentials(
+                token_data.get("access_token"),
+                token_data.get("refresh_token"),
+                token_data.get("expires_in") or 3600
+            )
+            
+            # SECURITY: Store new credentials securely
+            self._store_credentials(credentials)
+            self._credentials = credentials
+            
+            logger.info("Token refreshed successfully")
+            return credentials.access_token
         except ValueError as e:
             logger.error(f"Token refresh failed: {e}")
             raise TokenExpiredError(f"Token refresh failed: {e}")
@@ -291,6 +298,7 @@ class UpstoxAuthService:
     def is_authenticated(self) -> bool:
         """Check if we have valid credentials or can refresh them"""
         if not self._credentials:
+            logger.info("No credentials available")
             return False
             
         # SECURITY: Ensure timezone-aware comparison
@@ -303,6 +311,7 @@ class UpstoxAuthService:
             
         # If token is expired but we have refresh token, we can refresh
         if self._credentials.refresh_token:
+            logger.info("Token expired but refresh token available")
             return True
             
         return False
@@ -340,5 +349,8 @@ class UpstoxAuthService:
     
 
 def get_upstox_auth_service():
-    """Factory function to get UpstoxAuthService instance"""
-    return UpstoxAuthService()
+    """Factory function to get shared UpstoxAuthService instance"""
+    global _auth_service_instance
+    if _auth_service_instance is None:
+        _auth_service_instance = UpstoxAuthService()
+    return _auth_service_instance

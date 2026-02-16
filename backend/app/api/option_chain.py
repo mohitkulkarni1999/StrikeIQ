@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import Dict, Any, List
 from ..services.market_data.option_chain_service import OptionChainService
+from ..services.upstox_auth_service import get_upstox_auth_service
 from ..models.database import get_db
 from ..core.config import settings
 import logging
@@ -10,14 +11,28 @@ from datetime import datetime
 router = APIRouter(tags=["option-chain"])
 logger = logging.getLogger(__name__)
 
+# Global instances to ensure singleton behavior
+_auth_service = None
+_option_chain_service = None
+
 def get_option_chain_service():
     """Dependency injection for OptionChainService"""
-    return OptionChainService()
+    global _auth_service, _option_chain_service
+    
+    if _auth_service is None:
+        _auth_service = get_upstox_auth_service()
+        logger.info("=== INVESTIGATION: Created global auth service ===")
+    
+    if _option_chain_service is None:
+        _option_chain_service = OptionChainService(_auth_service)
+        logger.info("=== INVESTIGATION: Created global option chain service ===")
+    
+    return _option_chain_service
 
 @router.get("/{symbol}", response_model=Dict[str, Any])
 async def get_option_chain(
     symbol: str,
-    expiry_date: str = None,
+    expiry_date: Optional[str] = None,
     service: OptionChainService = Depends(get_option_chain_service),
     db: Session = Depends(get_db)
 ):
@@ -29,24 +44,31 @@ async def get_option_chain(
         if symbol.upper() not in ["NIFTY", "BANKNIFTY"]:
             raise HTTPException(status_code=400, detail="Invalid symbol. Must be NIFTY or BANKNIFTY")
         
-        # Get option chain data
+        # Get option chain data (service will handle expiry resolution)
+        print(f"🔍 DEBUG: API endpoint about to call service for {symbol}")
         chain_data = await service.get_option_chain(symbol, expiry_date)
+        print(f"🔍 DEBUG: Service returned successfully to API endpoint")
         
-        if "error" in chain_data:
-            raise HTTPException(status_code=500, detail=chain_data["error"])
-        
+        # Service already handles HTTPException properly, no need to check for "error"
         return {
             "status": "success",
             "data": chain_data,
             "symbol": symbol.upper(),
             "expiry_date": expiry_date,
-            "timestamp": chain_data[0]["timestamp"] if chain_data else None,
-            "total_strikes": len(chain_data)
+            "timestamp": chain_data.get("timestamp") if isinstance(chain_data, dict) else datetime.now().isoformat(),
+            "total_strikes": len(chain_data.get("calls", [])) + len(chain_data.get("puts", [])) if isinstance(chain_data, dict) else 0
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        print(f"🔍 DEBUG: HTTPException caught in API endpoint: {e.status_code}")
+        logger.info(f"Returning status code: {e.status_code}")
+        logger.error(f"HTTPException in option chain API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in option chain API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        print(f"🔍 DEBUG: Generic exception caught in API endpoint: {e}")
+        logger.error(f"Unexpected error in option chain API: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/{symbol}/oi-analysis", response_model=Dict[str, Any])
 async def get_oi_analysis(
@@ -65,9 +87,7 @@ async def get_oi_analysis(
         # Get OI analysis
         analysis = await service.get_oi_analysis(symbol)
         
-        if "error" in analysis:
-            raise HTTPException(status_code=500, detail=analysis["error"])
-        
+        # Service already handles HTTPException properly, no need to check for "error"
         return {
             "status": "success",
             "data": analysis,
@@ -76,9 +96,13 @@ async def get_oi_analysis(
             "total_strikes": analysis.get("total_strikes", 0)
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        logger.error(f"HTTPException in OI analysis API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in OI analysis API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in OI analysis API: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/{symbol}/greeks", response_model=Dict[str, Any])
 async def get_greeks(
@@ -104,8 +128,7 @@ async def get_greeks(
         # Get option chain to find specific strike
         chain_data = await service.get_option_chain(symbol, expiry_date)
         
-        if "error" in chain_data:
-            raise HTTPException(status_code=500, detail=chain_data["error"])
+        # Service already handles HTTPException properly, no need to check for "error"
         
         # Find the specific option
         target_option = None
@@ -142,6 +165,10 @@ async def get_greeks(
             "timestamp": datetime.now().isoformat()
         }
         
+    except HTTPException as e:
+        # Re-raise HTTPException without modification
+        logger.error(f"HTTPException in Greeks API: {e.status_code} - {e.detail}")
+        raise e
     except Exception as e:
-        logger.error(f"Error in Greeks API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.error(f"Unexpected error in Greeks API: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error")

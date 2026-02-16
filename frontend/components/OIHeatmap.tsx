@@ -1,5 +1,20 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import axios from 'axios';
+import { useState, useEffect, useRef } from 'react';
+import { BarChart3, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
+import api from '../src/lib/api';
+
+interface OIData {
+  strike: number;
+  oi: number;
+  change: number;
+  ltp: number;
+  volume: number;
+  iv: number;
+  put_oi: number;
+  put_change: number;
+  put_ltp: number;
+  put_volume: number;
+  put_iv: number;
+}
 
 interface ExpiryDate {
   date: string;
@@ -7,123 +22,42 @@ interface ExpiryDate {
   isCurrent: boolean;
 }
 
-interface OIData {
-  strike: number;
-  oi: number;
-  change: number;
-  ltp: number;
-  putLtp: number;
-  putChange: number;
-  putOi: number;
-  isATM?: boolean;
-}
-
 interface OIHeatmapProps {
   symbol: string;
-  onAnalyticsUpdate?: (analytics: any) => void;
+  liveData?: any; // Live option chain data from useLiveMarketData
 }
 
-export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps) {
-  const [availableExpiries, setAvailableExpiries] = useState<ExpiryDate[]>([]);
-  const [selectedExpiry, setSelectedExpiry] = useState<string>('');
-  const [expiryLoading, setExpiryLoading] = useState<boolean>(false);
+export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
   const [oiData, setOiData] = useState<OIData[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
-  const [analytics, setAnalytics] = useState<any>(null);
   const [error, setError] = useState<string | null>(null);
-
-  // Format expiry date for display
-  const formatExpiryDate = (dateString: string) => {
-    const date = new Date(dateString);
-    const today = new Date();
-    
-    // Calculate days until expiry
-    const daysUntilExpiry = Math.ceil((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (date.toDateString() === today.toDateString()) {
-      return 'Today';
-    } else if (daysUntilExpiry === 1) {
-      return 'Tomorrow';
-    } else if (daysUntilExpiry > 1 && daysUntilExpiry <= 7) {
-      // Show "X days" for expiries within a week
-      return `${daysUntilExpiry} days`;
-    } else if (daysUntilExpiry > 7 && daysUntilExpiry <= 14) {
-      // Show "X weeks" for expiries between 7-14 days
-      const weeks = Math.floor(daysUntilExpiry / 7);
-      return `${weeks} weeks`;
-    } else {
-      // Show formatted date for longer expiries
-      return date.toLocaleDateString('en-IN', { 
-        day: 'numeric', 
-        month: 'short', 
-        year: '2-digit' 
-      });
-    }
-  };
-
-  // Fetch spot price from dashboard API
-  const fetchSpotPrice = async () => {
-    try {
-      console.log(`=== DEBUG: Fetching spot price from dashboard API for ${symbol} ===`);
-      const response = await axios.get(`http://localhost:8000/api/dashboard/${symbol}`);
-      console.log("=== DEBUG: Dashboard response:", response.data);
-      
-      // Extract spot price from dashboard response
-      const dashboardData = response.data;
-      const price = dashboardData?.data?.spot_price || dashboardData?.spot_price || null;
-      
-      console.log("=== DEBUG: Extracted spot price:", price);
-      setSpotPrice(price);
-      
-    } catch (err: any) {
-      console.error("=== DEBUG: Error fetching spot price:", err);
-      // Don't set error for spot price failure, just log it
-    }
-  };
+  const [expiryLoading, setExpiryLoading] = useState<boolean>(false);
+  const [availableExpiries, setAvailableExpiries] = useState<ExpiryDate[]>([]);
+  const [selectedExpiry, setSelectedExpiry] = useState<string>('');
+  
+  const tableRef = useRef<HTMLDivElement>(null);
+  const atmRowRef = useRef<HTMLTableRowElement>(null);
 
   // Fetch available expiry dates
   const fetchAvailableExpiries = async () => {
     try {
       setExpiryLoading(true);
-      console.log(`🔍 Fetching contracts for ${symbol}...`);
-      console.log(`🔍 Full API URL: http://localhost:8000/api/v1/options/contract/${symbol}`);
-      const response = await axios.get(`http://localhost:8000/api/v1/options/contract/${symbol}`);
+      const response = await api.get(`/api/v1/options/contract/${symbol}`);
       
-      console.log('📊 Expiry response:', response.data);
-      console.log('📊 Response status:', response.status);
-      console.log('📊 Response type:', typeof response.data);
-      
-      // Check if response is AUTH_REQUIRED
-      if (response.data && response.data.session_type === 'AUTH_REQUIRED') {
-        console.log('🚫 AUTH_REQUIRED received for contracts - authentication needed');
-        setError('Authentication required to fetch option contracts');
-        setAvailableExpiries([]);
-        return;
-      }
-      
-      // Handle successful response with real data
       let expiryDates: string[] = [];
-      if (response.data && response.data.status === 'success' && response.data.data) {
+      if (response.data && response.data.data && Array.isArray(response.data.data)) {
         expiryDates = response.data.data;
-        console.log(`✅ Got ${expiryDates.length} expiry dates for ${symbol}`);
-      } else if (Array.isArray(response.data)) {
+      } else if (response.data && Array.isArray(response.data)) {
         expiryDates = response.data;
-        console.log(`✅ Got ${expiryDates.length} expiry dates (direct array)`);
-      } else {
-        console.error('❌ Unexpected response format:', response.data);
-        setError('Invalid response format from contracts API');
-        setAvailableExpiries([]);
-        return;
       }
       
       const expiries: ExpiryDate[] = expiryDates.map((date: string) => {
         const expiryDate = new Date(date);
         const today = new Date();
         
-        // Calculate if this is the current/near expiry
         const daysUntilExpiry = Math.ceil((expiryDate.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-        const isCurrent = daysUntilExpiry >= 0 && daysUntilExpiry <= 7; // Within next week
+        const isCurrent = daysUntilExpiry >= 0 && daysUntilExpiry <= 7;
         
         return {
           date,
@@ -134,17 +68,11 @@ export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps)
       
       setAvailableExpiries(expiries);
       
-      // Auto-select nearest expiry (always select when new expiries are loaded)
-      if (expiries.length > 0) {
-        // Prioritize current expiries (within next week)
+      if (!selectedExpiry && expiries.length > 0) {
         const currentExpiry = expiries.find(e => e.isCurrent);
         const nearestExpiry = currentExpiry || expiries[0];
-        console.log('Auto-selecting expiry:', nearestExpiry.date, nearestExpiry.label);
         setSelectedExpiry(nearestExpiry.date);
       }
-      
-      console.log('Available expiries:', expiries); // Debug log
-      console.log('Selected expiry:', selectedExpiry); // Debug log
       
     } catch (err) {
       console.error('Error fetching expiries:', err);
@@ -154,162 +82,184 @@ export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps)
     }
   };
 
-  // Handle expiry selection
-  const handleExpiryChange = (expiry: string) => {
-    console.log(`📅 Expiry selected: ${expiry} for ${symbol}`);
-    setSelectedExpiry(expiry);
+  // Format expiry date for display
+  const formatExpiryDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const today = new Date();
+    
+    const daysUntilExpiry = Math.ceil((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+    
+    if (date.toDateString() === today.toDateString()) {
+      return 'Today';
+    } else if (date.toDateString() === new Date(today.getTime() + 24 * 60 * 60 * 1000).toDateString()) {
+      return 'Tomorrow';
+    } else if (daysUntilExpiry > 0 && daysUntilExpiry <= 7) {
+      return `${daysUntilExpiry} days`;
+    } else if (daysUntilExpiry > 7 && daysUntilExpiry <= 14) {
+      const weeks = Math.floor(daysUntilExpiry / 7);
+      return `${weeks} week${weeks > 1 ? 's' : ''}`;
+    } else {
+      return date.toLocaleDateString('en-IN', { 
+        day: 'numeric', 
+        month: 'short', 
+        year: '2-digit'
+      });
+    }
   };
 
-  // Reset expiry when symbol changes
-  useEffect(() => {
-    console.log(`🔄 Symbol changed to ${symbol}, resetting expiry`);
-    setSelectedExpiry('');
-    setOiData([]);
-  }, [symbol]);
-
-  // Fetch spot price when symbol changes
-  useEffect(() => {
-    if (symbol) {
-      fetchSpotPrice();
+  // Handle expiry selection
+  const handleExpiryChange = (expiry: string) => {
+    const date = new Date(expiry);
+    const today = new Date();
+    
+    if (!isNaN(date.getTime()) && date >= today) {
+      setSelectedExpiry(expiry);
     }
-  }, [symbol]);
+  };
 
-  // Find closest strike to spot price
-  const closestStrike = useMemo(() => {
-    if (!spotPrice || oiData.length === 0) return null;
-    
-    let closest = null;
-    let closestDistance = Infinity;
-    
-    oiData.forEach((row) => {
-      const distance = Math.abs(row.strike - spotPrice);
-      if (distance < closestDistance) {
-        closestDistance = distance;
-        closest = row.strike;
-      }
-    });
-    
-    return closest;
-  }, [spotPrice, oiData]);
-
-  // Fetch available expiry dates
+  // Auto-scroll to ATM row when data loads
   useEffect(() => {
-    console.log(`🔄 Fetching expiries for ${symbol}...`);
+    if (atmRowRef.current && tableRef.current && oiData.length > 0) {
+      const tableContainer = tableRef.current;
+      const atmRow = atmRowRef.current;
+      
+      // Calculate position to center ATM row in view (show 7 rows total)
+      const rowHeight = atmRow.offsetHeight;
+      const containerHeight = tableContainer.clientHeight;
+      const targetScrollTop = atmRow.offsetTop - (containerHeight / 2) + (rowHeight / 2);
+      
+      // Smooth scroll to center ATM row
+      tableContainer.scrollTo({
+        top: targetScrollTop,
+        behavior: 'smooth'
+      });
+    }
+  }, [oiData, spotPrice]);
+
+  // Process live data from WebSocket when available
+  useEffect(() => {
+    if (liveData && liveData.calls && liveData.puts) {
+      console.log('🔥 OIHeatmap - Processing live WebSocket data');
+      
+      // Use spot price from live data
+      setSpotPrice(liveData.spot);
+      
+      // Transform live data for heatmap
+      const transformedData = liveData.calls.map((call: any) => {
+        const matchingPut = liveData.puts.find((p: any) => p.strike === call.strike);
+        
+        return {
+          strike: call.strike,
+          oi: call.oi || 0,
+          change: call.change || 0,
+          ltp: call.ltp || 0,
+          volume: call.volume || 0,
+          iv: call.iv || 0,
+          put_oi: matchingPut?.oi || 0,
+          put_change: matchingPut?.change || 0,
+          put_ltp: matchingPut?.ltp || 0,
+          put_volume: matchingPut?.volume || 0,
+          put_iv: matchingPut?.iv || 0,
+        };
+      });
+      
+      setOiData(transformedData);
+      setLoading(false);
+      setError(null);
+      
+      console.log('🔥 OIHeatmap - Live data processed:', transformedData.length, 'strikes');
+    }
+  }, [liveData]);
+
+  // Fetch expiries on component mount (REST - cached)
+  useEffect(() => {
     fetchAvailableExpiries();
   }, [symbol]);
 
   // Fetch option chain data
   useEffect(() => {
-    console.log(`🔍 Option chain useEffect triggered. selectedExpiry: "${selectedExpiry}", symbol: ${symbol}`);
-    // Only fetch if we have a selected expiry
     if (selectedExpiry) {
-      console.log(`🔍 Starting option chain fetch for ${symbol} with expiry: ${selectedExpiry}`);
       const fetchOptionChain = async () => {
         try {
           setLoading(true);
           setError(null);
           
-          console.log(`📡 Fetching option chain for ${symbol} with expiry: ${selectedExpiry}`);
-          console.log(`📡 Full API URL: http://localhost:8000/api/v1/options/chain/${symbol}?expiry_date=${selectedExpiry}`);
-          if (symbol === 'BANKNIFTY') {
-            console.log('📡 Option chain API called for BANKNIFTY');
-          }
-          const response = await axios.get(
-            `http://localhost:8000/api/v1/options/chain/${symbol}?expiry_date=${selectedExpiry}`
+          const response = await api.get(
+            `/api/v1/options/chain/${symbol}?expiry_date=${selectedExpiry}`
           );
         
-          console.log("📊 Option chain response:", response.data);
+          const chain = response.data;
+          const calls = chain?.data?.calls || [];
+          const puts = chain?.data?.puts || [];
           
-          // Check if response is AUTH_REQUIRED
-          if (response.data && response.data.session_type === 'AUTH_REQUIRED') {
-            console.log('🚫 AUTH_REQUIRED received for option chain - authentication needed');
-            setError('Authentication required to fetch option chain data');
-            setOiData([]);
-            return;
-          }
+          // Use the actual spot price from API response instead of calculating it
+          let currentSpotPrice = chain?.data?.spot || null;
           
-          // Handle successful response with real data
-          if (response.data && response.data.status === 'success') {
-            console.log(`✅ Got option chain data for ${symbol}`);
-            const chain = response.data;
+          console.log('🔍 OIHeatmap - Raw API Response:', chain);
+          console.log('🔍 OIHeatmap - Extracted spot price:', currentSpotPrice);
+          
+          // Fallback calculation only if spot price is not available
+          if (!currentSpotPrice && calls.length > 0) {
+            console.log('🔍 OIHeatmap - Spot price not found, calculating from options');
+            // Find strike closest to spot (ATM) - this is usually current spot
+            const sortedCalls = [...calls].sort((a, b) => Math.abs(a.strike - (spotPrice || 0)) - Math.abs(b.strike - (spotPrice || 0)));
+            const atmCall = sortedCalls[0];
             
-            // Backend returns: {status: "success", data: {symbol, expiry, calls, puts, analytics}}
-            const calls = chain?.data?.calls || [];
-            const puts = chain?.data?.puts || [];
-            const analyticsData = chain?.data?.analytics;
-            
-            console.log(`📊 Got ${calls.length} calls and ${puts.length} puts`);
-            console.log("📊 Analytics data:", analyticsData);
-            console.log("=== DEBUG: First 3 calls ===");
-            console.table(calls?.slice(0, 3));
-            console.log("=== DEBUG: First 3 puts ===");
-            console.table(puts?.slice(0, 3));
-            
-            // Set analytics data
-            if (analyticsData) {
-              setAnalytics(analyticsData);
-              onAnalyticsUpdate?.(analyticsData);
+            // Estimate spot from ATM strike and option prices
+            if (atmCall && atmCall.ltp > 0) {
+              const matchingPut = puts.find((p: any) => p.strike === atmCall.strike);
+              if (matchingPut && matchingPut.ltp > 0) {
+                // Spot ≈ Strike + Call LTP - Put LTP (put-call parity approximation)
+                currentSpotPrice = atmCall.strike + atmCall.ltp - matchingPut.ltp;
+                console.log('🔍 OIHeatmap - Calculated spot price:', currentSpotPrice);
+              }
             }
-            
-            // Find ATM strike and transform data
-            const transformedData = transformOptionChainData(calls, puts, spotPrice);
-            console.log(`🔄 Transformed data: ${transformedData.length} rows`);
-            setOiData(transformedData);
-            setError(null); // Clear any previous errors
-            
-          } else {
-            console.error('❌ Invalid option chain response format:', response.data);
-            setError('Invalid response format from option chain API');
-            setOiData([]);
-            return;
           }
+          
+          setSpotPrice(currentSpotPrice);
         
-        } catch (error: any) {
-          console.error('❌ Error fetching option chain:', error);
-          setError('Failed to fetch option chain data');
-          setOiData([]);
+          const transformedData = calls.map((call: any) => {
+            const matchingPut = puts.find((p: any) => p.strike === call.strike);
+        
+            return {
+              strike: call.strike,
+              oi: call.oi || 0,
+              change: call.change || 0,
+              ltp: call.ltp || 0,
+              volume: call.volume || 0,
+              iv: call.iv || 0,
+              put_oi: matchingPut?.oi || 0,
+              put_change: matchingPut?.change || 0,
+              put_ltp: matchingPut?.ltp || 0,
+              put_volume: matchingPut?.volume || 0,
+              put_iv: matchingPut?.iv || 0
+            };
+          });
+        
+          setOiData(transformedData);
+        
+        } catch (err: any) {
+          console.error("Error fetching option chain:", err);
+          
+          // Check if it's a 401 error - axios interceptor will handle redirect
+          if (err.response?.status === 401) {
+            console.log('🔐 401 detected in OIHeatmap - axios interceptor will handle redirect');
+            return; // Don't set error state, let interceptor handle
+          }
+          
+          if (err?.response?.status === 429) {
+            setError("Rate limit exceeded - please wait");
+          } else {
+            setError("Failed to fetch option chain data");
+          }
         } finally {
           setLoading(false);
         }
       };
-
+      
       fetchOptionChain();
     }
-  }, [symbol, selectedExpiry, spotPrice]);
-
-  // Transform option chain data into the format expected by the table
-  const transformOptionChainData = (calls: any[], puts: any[], spotPrice: number) => {
-    const transformedData = calls.map((call: any) => {
-      const matchingPut = puts.find(
-        (p: any) => p.strike === call.strike
-      );
-    
-      return {
-        strike: call.strike,
-        oi: call.oi || 0,
-        change: call.change || 0,
-        ltp: call.ltp || 0,
-        putOi: matchingPut?.oi || 0,
-        putChange: matchingPut?.change || 0,
-        putLtp: matchingPut?.ltp || 0,
-      };
-    });
-    
-    // Find ATM strike (closest to spot price)
-    const atmStrike = transformedData.reduce((closest: any, current: any) => {
-      return Math.abs(current.strike - spotPrice) < Math.abs(closest.strike - spotPrice)
-        ? current
-        : closest;
-    }, transformedData[0]);
-    
-    // Mark ATM strike
-    const finalData = transformedData.map((item: any) => ({
-      ...item,
-      isATM: item.strike === atmStrike.strike,
-    }));
-    
-    return finalData;
-  };
+  }, [symbol, selectedExpiry]);
 
   if (loading) {
     return (
@@ -336,26 +286,55 @@ export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps)
     );
   }
 
-  // Debug logs before rendering
-  console.log("=== DEBUG: About to render oiData with", oiData?.length, "rows");
-  console.log("=== DEBUG: Current symbol:", symbol);
-  console.log("=== DEBUG: Current spot price:", spotPrice);
-  console.log("=== DEBUG: Closest strike to spot price:", closestStrike);
-  console.log("=== DEBUG: Selected expiry:", selectedExpiry);
-  oiData.forEach((row, index) => {
-    if (index < 3) {
-      console.log(`=== DEBUG: Row ${index} strike=${row.strike} oi=${row.oi} ltp=${row.ltp} spotMatch=${row.strike === spotPrice}`);
-    }
-  });
-
   return (
-    <div className="space-y-4">
+    <div className="metric-card min-h-screen">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-2xl font-bold">OI Heatmap - {symbol}</h3>
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-3 text-base">
+            <div className="w-4 h-4 bg-danger-500 rounded"></div>
+            <span className="text-muted-foreground">Call OI</span>
+          </div>
+          <div className="flex items-center gap-3 text-base">
+            <div className="w-4 h-4 bg-success-500 rounded"></div>
+            <span className="text-muted-foreground">Put OI</span>
+          </div>
+        </div>
+      </div>
+
+      {/* Current Price Indicator */}
+      {spotPrice && (
+        <div className="mb-4 p-3 glass-morphism rounded-lg border-l-4 border-l-green-500">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-muted-foreground">Current Spot Price</span>
+            <div className="text-right">
+              <span className="text-lg font-bold text-green-400">
+                ₹{spotPrice.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+              </span>
+              <div className="text-xs text-muted-foreground">
+                Expected: ₹25,471.10
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {/* DEBUG SECTION - Temporary */}
+      <div className="mb-4 bg-black/50 border border-red-500/30 rounded-lg p-3">
+        <h4 className="text-red-400 font-bold mb-2">DEBUG: OIHeatmap Spot Price</h4>
+        <div className="text-green-400 text-xs space-y-1">
+          <div>Current: ₹{spotPrice?.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) || 'null'}</div>
+          <div>Expected: ₹25,471.10</div>
+          <div>Difference: {spotPrice ? (spotPrice - 25471.10).toFixed(2) : 'N/A'}</div>
+        </div>
+      </div>
+
       {/* Expiry Selector */}
       <div className="mb-4 p-3 glass-morphism rounded-lg">
         <div className="flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-semibold mb-2">Option Chain</h2>
-            <p className="text-sm text-muted-foreground">Select expiry date</p>
+          <div className="flex items-center gap-2">
+            <Calendar className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Expiry Date</span>
           </div>
           <div className="flex items-center gap-2">
             {expiryLoading ? (
@@ -364,25 +343,18 @@ export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps)
                 <span className="text-sm text-blue-500">Loading expiries...</span>
               </div>
             ) : availableExpiries.length > 0 ? (
-              <div className="flex items-center gap-2">
-                <select
-                  value={selectedExpiry}
-                  onChange={(e) => handleExpiryChange(e.target.value)}
-                  className="bg-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-w-32"
-                  disabled={loading}
-                >
-                  {availableExpiries.map((expiry) => (
-                    <option key={expiry.date} value={expiry.date}>
-                      {expiry.label} {expiry.isCurrent && '(Current)'}
-                    </option>
-                  ))}
-                </select>
-                {selectedExpiry && (
-                  <span className="text-xs text-muted-foreground">
-                    {formatExpiryDate(selectedExpiry)}
-                  </span>
-                )}
-              </div>
+              <select
+                value={selectedExpiry}
+                onChange={(e) => handleExpiryChange(e.target.value)}
+                className="bg-background border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent min-w-32"
+                disabled={loading}
+              >
+                {availableExpiries.map((expiry) => (
+                  <option key={expiry.date} value={expiry.date}>
+                    {expiry.label} {expiry.isCurrent && '(Current)'}
+                  </option>
+                ))}
+              </select>
             ) : (
               <span className="text-sm text-muted-foreground">No expiries available</span>
             )}
@@ -390,156 +362,135 @@ export default function OIHeatmap({ symbol, onAnalyticsUpdate }: OIHeatmapProps)
         </div>
       </div>
 
-      {/* OI Analytics */}
-      {analytics && (
-        <div className="mb-4 p-4 glass-morphism rounded-lg">
-          <h3 className="text-lg font-semibold mb-3">OI Analytics</h3>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {/* PCR */}
-            <div className="text-center">
-              <div className="text-sm text-muted-foreground mb-1">Put/Call Ratio</div>
-              <div className={`text-2xl font-bold ${
-                analytics.pcr > 1 ? 'text-green-500' : 
-                analytics.pcr < 1 ? 'text-red-500' : 
-                'text-gray-500'
-              }`}>
-                {analytics.pcr?.toFixed(2) || '0.00'}
-              </div>
-            </div>
-            
-            {/* Strongest Support */}
-            <div className="text-center">
-              <div className="text-sm text-muted-foreground mb-1">Strongest Support</div>
-              <div className="text-2xl font-bold text-green-500">
-                {analytics.strongest_support?.toLocaleString('en-IN') || '--'}
-              </div>
-            </div>
-            
-            {/* Strongest Resistance */}
-            <div className="text-center">
-              <div className="text-sm text-muted-foreground mb-1">Strongest Resistance</div>
-              <div className="text-2xl font-bold text-red-500">
-                {analytics.strongest_resistance?.toLocaleString('en-IN') || '--'}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Current Price Indicator */}
-      <div className="mb-4 p-3 glass-morphism rounded-lg">
-        <div className="flex items-center justify-between">
-          <span className="text-sm text-muted-foreground">Current Price</span>
-          <span className="text-lg font-bold">
-            {spotPrice ? `₹${spotPrice.toLocaleString('en-IN')}` : '₹--'}
-          </span>
-        </div>
-      </div>
-
       {/* OI Heatmap Table */}
-      <div className="overflow-x-auto overflow-y-auto h-[500px] border border-white/10 rounded-lg shadow-lg">
-        <table className="w-full">
-          <thead>
-            <tr className="text-left text-sm text-muted-foreground border-b border-white/20 bg-muted/50 sticky top-0 z-10">
-              <th className="pb-4 px-4">Strike</th>
-              <th className="pb-4 px-4 text-center">Call OI</th>
-              <th className="pb-4 px-4 text-center">Call Chg</th>
-              <th className="pb-4 px-4 text-center">Call LTP</th>
-              <th className="pb-4 px-4 text-center">Put LTP</th>
-              <th className="pb-4 px-4 text-center">Put Chg</th>
-              <th className="pb-4 px-4 text-center">Put OI</th>
-            </tr>
-          </thead>
+      <div className="relative">
+        {/* Fixed Header */}
+        <div className="sticky top-0 z-10 bg-background/95 backdrop-blur-sm border-b border-white/10">
+          <table className="w-full">
+            <thead>
+              <tr className="text-left text-sm text-muted-foreground">
+                <th className="py-3 px-2 text-center min-w-[90px]">Call OI</th>
+                <th className="py-3 px-2 text-center min-w-[70px]">Call Chg</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Call LTP</th>
+                <th className="py-3 px-2 text-center min-w-[80px]">Strike</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Put LTP</th>
+                <th className="py-3 px-2 text-center min-w-[70px]">Put Chg</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Put OI</th>
+              </tr>
+            </thead>
+          </table>
+        </div>
+        
+        {/* Scrollable Body */}
+        <div className="overflow-x-auto overflow-y-auto max-h-96" ref={tableRef}>
+          <table className="w-full">
+            <thead className="invisible">
+              <tr className="text-left text-sm text-muted-foreground">
+                <th className="py-3 px-2 text-center min-w-[90px]">Call OI</th>
+                <th className="py-3 px-2 text-center min-w-[70px]">Call Chg</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Call LTP</th>
+                <th className="py-3 px-2 text-center min-w-[80px]">Strike</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Put LTP</th>
+                <th className="py-3 px-2 text-center min-w-[70px]">Put Chg</th>
+                <th className="py-3 px-2 text-center min-w-[90px]">Put OI</th>
+              </tr>
+            </thead>
           <tbody>
             {oiData.map((row, index) => {
-              const isATM = row.isATM || false;
-              
-              // Debug first few rows
-              if (index < 3) {
-                console.log(`🔍 Rendering row ${index}: strike=${row.strike}, callOI=${row.oi}, putOI=${row.putOi}, callLTP=${row.ltp}, putLTP=${row.putLtp}`);
-              }
+              // Check if this strike is closest ATM (single strike only)
+              const isATM = spotPrice && Math.abs(row.strike - spotPrice) <= 25; // Within 25 points (tighter range)
               
               return (
-                <tr 
-                  key={row.strike} 
-                  data-strike={row.strike}
-                  className={`border-b border-white/5 hover:bg-white/5 transition-colors ${
-                    isATM ? 'bg-green-500/20 border-green-500/50 shadow-lg shadow-green-500/20' : ''
-                  }`}
-                >
-                  <td className={`py-4 px-4 font-bold text-sm ${
-                    isATM ? 'text-green-500 border-l-4 border-l-green-500' : ''
+              <tr 
+                key={index} 
+                ref={isATM ? atmRowRef : null}
+                className={`border-b border-white/5 hover:bg-white/5 ${
+                  isATM ? 'bg-green-500/10 border-l-2 border-l-green-500' : ''
+                }`}
+              >
+                {/* Call OI with heatmap */}
+                <td className="py-3 text-center">
+                  <div 
+                    className="px-2 py-1 rounded text-xs font-medium text-white oi-heatmap-cell"
+                    style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
+                  >
+                    {row.oi.toLocaleString('en-IN')}
+                  </div>
+                </td>
+                
+                {/* Call Change */}
+                <td className="py-3 text-center">
+                  <div className={`px-2 py-1 rounded text-xs font-medium ${
+                    row.change > 0 ? 'bg-success-500/20 text-success-500' :
+                    row.change < 0 ? 'bg-danger-500/20 text-danger-500' :
+                    'bg-gray-500/20 text-gray-300'
                   }`}>
-                    <div className="flex items-center justify-between">
-                      <span>{row.strike.toLocaleString('en-IN')}</span>
-                      {isATM && (
-                        <span className="text-xs bg-green-500 text-white px-2 py-1 rounded-full">ATM</span>
-                      )}
-                    </div>
-                  </td>
-                  
-                  {/* Call OI with heatmap */}
-                  <td className="py-4 px-4 text-center">
-                    <div 
-                      className="px-3 py-2 rounded text-sm font-medium text-white oi-heatmap-cell"
-                      style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
-                    >
-                      {row.oi.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                  
-                  {/* Call Change */}
-                  <td className="py-4 px-4 text-center">
-                    <div className={`px-3 py-2 rounded text-sm font-medium ${
-                      row.change > 0 ? 'bg-success-500/20 text-success-500' :
-                      row.change < 0 ? 'bg-danger-500/20 text-danger-500' :
-                      'bg-gray-500/20 text-gray-300'
-                    }`}>
-                      {row.change?.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                  
-                  {/* Call LTP */}
-                  <td className="py-4 px-4 text-center text-sm font-medium">
-                    {row.ltp?.toLocaleString('en-IN', {
-                      style: 'currency',
-                      currency: 'INR'
-                    })}
-                  </td>
-                  
-                  {/* Put LTP */}
-                  <td className="py-4 px-4 text-center text-sm font-medium">
-                    {row.putLtp?.toLocaleString('en-IN', {
-                      style: 'currency',
-                      currency: 'INR'
-                    })}
-                  </td>
-                  
-                  {/* Put Change */}
-                  <td className="py-4 px-4 text-center">
-                    <div className={`px-3 py-2 rounded text-sm font-medium ${
-                      row.putChange > 0 ? 'bg-success-500/20 text-success-500' :
-                      row.putChange < 0 ? 'bg-danger-500/20 text-danger-500' :
-                      'bg-gray-500/20 text-gray-300'
-                    }`}>
-                      {row.putChange?.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                  
-                  {/* Put OI with heatmap */}
-                  <td className="py-4 px-4 text-center">
-                    <div 
-                      className="px-3 py-2 rounded text-sm font-medium text-white oi-heatmap-cell"
-                      style={{ backgroundColor: 'rgba(239, 68, 68, 0.5)' }}
-                    >
-                      {row.putOi?.toLocaleString('en-IN')}
-                    </div>
-                  </td>
-                </tr>
+                    {row.change?.toLocaleString('en-IN')}
+                  </div>
+                </td>
+                
+                {/* Call LTP */}
+                <td className="py-3 text-center text-sm">
+                  {row.ltp?.toLocaleString('en-IN', {
+                    style: 'currency',
+                    currency: 'INR'
+                  })}
+                </td>
+                
+                {/* Strike */}
+                <td className="py-3 px-2 text-center font-medium">
+                  <span className={isATM ? 'text-green-400 font-bold' : ''}>
+                    {row.strike.toLocaleString('en-IN')}
+                    {isATM && ' 📍'}
+                  </span>
+                </td>
+                
+                {/* Put LTP */}
+                <td className="py-3 text-center text-sm">
+                  {row.put_ltp?.toLocaleString('en-IN', {
+                    style: 'currency',
+                    currency: 'INR'
+                  })}
+                </td>
+                
+                {/* Put Change */}
+                <td className="py-3 text-center">
+                  <div className={`px-2 py-1 rounded text-xs font-medium ${
+                    row.put_change > 0 ? 'bg-success-500/20 text-success-500' :
+                    row.put_change < 0 ? 'bg-danger-500/20 text-danger-500' :
+                    'bg-gray-500/20 text-gray-300'
+                  }`}>
+                    {row.put_change?.toLocaleString('en-IN')}
+                  </div>
+                </td>
+                
+                {/* Put OI with heatmap */}
+                <td className="py-3 text-center">
+                  <div 
+                    className="px-2 py-1 rounded text-xs font-medium text-white oi-heatmap-cell"
+                    style={{ backgroundColor: 'rgba(34, 197, 94, 0.5)' }}
+                  >
+                    {row.put_oi.toLocaleString('en-IN')}
+                  </div>
+                </td>
+              </tr>
               );
             })}
           </tbody>
         </table>
+        </div>
+      </div>
+
+      {/* Legend */}
+      <div className="mt-4 pt-4 border-t border-white/10">
+        <div className="font-medium mb-2">Interpretation:</div>
+        <div className="text-sm text-muted-foreground space-y-1">
+          <div>• 📍 Green highlight indicates ATM (At-The-Money) strike</div>
+          <div>• Darker colors indicate higher Open Interest</div>
+          <div>• Green changes show OI addition, Red shows OI reduction</div>
+          <div>• High Call OI at strikes above spot = Resistance</div>
+          <div>• High Put OI at strikes below spot = Support</div>
+        </div>
       </div>
     </div>
   );

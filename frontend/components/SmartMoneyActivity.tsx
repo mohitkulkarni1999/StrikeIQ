@@ -1,5 +1,5 @@
 import { RealTimeSignals } from '../types/market';
-import { TrendingUp, TrendingDown, AlertTriangle, Activity } from 'lucide-react';
+import { TrendingUp, TrendingDown, AlertTriangle, Activity, Eye } from 'lucide-react';
 
 interface SmartMoneyActivityProps {
   signals: RealTimeSignals;
@@ -8,9 +8,19 @@ interface SmartMoneyActivityProps {
 export default function SmartMoneyActivity({ signals }: SmartMoneyActivityProps) {
   if (!signals) {
     return (
-      <div className="glass-morphism rounded-xl p-6">
-        <div className="text-center text-muted-foreground">
-          <p>No smart money data available</p>
+      <div className="glass-morphism rounded-xl p-6 border border-dashed border-white/20">
+        <div className="text-center">
+          <Eye className="w-12 h-12 text-muted-foreground/50 mx-auto mb-4" />
+          <h4 className="text-lg font-semibold text-white mb-2">Smart Money Monitoring</h4>
+          <p className="text-sm text-muted-foreground leading-relaxed">
+            Smart money signals will appear when sufficient institutional activity is detected in the options chain.
+          </p>
+          <div className="mt-4 pt-4 border-t border-white/10">
+            <div className="flex items-center justify-center gap-2 text-xs text-muted-foreground">
+              <Activity className="w-3 h-3" />
+              <span>Waiting for significant block trades</span>
+            </div>
+          </div>
         </div>
       </div>
     );
