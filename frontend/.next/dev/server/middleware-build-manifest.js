@@ -29,6 +29,21 @@ globalThis.__BUILD_MANIFEST = {
       "static/chunks/pages__app_2da965e7._.js",
       "static/chunks/turbopack-pages__app_a8b784bb._.js"
     ],
+    "/_error": [
+      "static/chunks/node_modules_next_dist_compiled_9c6fb6f2._.js",
+      "static/chunks/node_modules_next_dist_shared_lib_e7a9eec2._.js",
+      "static/chunks/node_modules_next_dist_client_5a8a528e._.js",
+      "static/chunks/node_modules_next_dist_e911413b._.js",
+      "static/chunks/node_modules_next_error_1cfbb379.js",
+      "static/chunks/[next]_entry_page-loader_ts_43b523b5._.js",
+      "static/chunks/node_modules_react_b4bd21af._.js",
+      "static/chunks/node_modules_react-dom_cjs_react-dom_development_2b5e0eb3.js",
+      "static/chunks/node_modules_react-dom_8a8085df._.js",
+      "static/chunks/node_modules_416396d1._.js",
+      "static/chunks/[root-of-the-server]__092393de._.js",
+      "static/chunks/pages__error_2da965e7._.js",
+      "static/chunks/turbopack-pages__error_0304f5ae._.js"
+    ],
     "/auth": [
       "static/chunks/node_modules_next_dist_compiled_9c6fb6f2._.js",
       "static/chunks/node_modules_next_dist_shared_lib_2f2a332e._.js",
@@ -41,6 +56,20 @@ globalThis.__BUILD_MANIFEST = {
       "static/chunks/[root-of-the-server]__b20fdfcb._.js",
       "static/chunks/pages_auth_index_tsx_2da965e7._.js",
       "static/chunks/turbopack-pages_auth_index_tsx_0f55b82c._.js"
+    ],
+    "/auth/success": [
+      "static/chunks/node_modules_next_dist_compiled_9c6fb6f2._.js",
+      "static/chunks/node_modules_next_dist_shared_lib_e7a9eec2._.js",
+      "static/chunks/node_modules_next_dist_client_5a8a528e._.js",
+      "static/chunks/node_modules_next_dist_335aced5._.js",
+      "static/chunks/node_modules_next_c7385ca9._.js",
+      "static/chunks/node_modules_react_e3593a73._.js",
+      "static/chunks/node_modules_react-dom_cjs_react-dom_development_2b5e0eb3.js",
+      "static/chunks/node_modules_react-dom_8a8085df._.js",
+      "static/chunks/node_modules_416396d1._.js",
+      "static/chunks/[root-of-the-server]__cac6fd13._.js",
+      "static/chunks/pages_auth_success_tsx_2da965e7._.js",
+      "static/chunks/turbopack-pages_auth_success_tsx_96e9c2c9._.js"
     ]
   },
   "devFiles": [],

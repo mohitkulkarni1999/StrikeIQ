@@ -30,7 +30,7 @@ class OptionChainService:
         try:
             mappings = {
                 "NIFTY": "NSE_INDEX|Nifty 50",
-                "BANKNIFTY": "NSE_INDEX|Nifty Bank",
+                "BANKNIFTY": "NSE_INDEX|BANKNIFTY",
             }
             
             instrument_key = mappings.get(symbol.upper())

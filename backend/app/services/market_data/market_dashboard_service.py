@@ -183,7 +183,8 @@ class MarketDashboardService:
         
         # Get the actual Upstox authorization URL
         auth_service = get_upstox_auth_service()
-        upstox_url = auth_service.get_authorization_url()
+        state = auth_service.generate_signed_state()
+        upstox_url = auth_service.get_authorization_url(state)
         
         return {
             "session_type": "AUTH_REQUIRED",

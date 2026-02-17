@@ -138,6 +138,11 @@ class UpstoxAuthService:
             )
             self._store_credentials(credentials)
             
+            # Validate TokenManager after successful authentication
+            from ..token_manager import get_token_manager
+            token_manager = get_token_manager()
+            token_manager.validate()
+            
             return {
                 "access_token": credentials.access_token,
                 "refresh_token": credentials.refresh_token,
