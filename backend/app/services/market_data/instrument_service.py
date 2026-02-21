@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import urllib.parse
 from typing import Dict, Optional, List
 from datetime import datetime, timedelta
 from .upstox_client import UpstoxClient
@@ -105,3 +106,48 @@ class InstrumentService:
     async def close(self):
         """Close client"""
         await self.client.close()
+    
+    def get_contract_instrument_key(self, symbol: str) -> str:
+        """Get correct instrument key for contract/expiry API"""
+        mapping = {
+            "NIFTY": "NSE_INDEX|Nifty 50",
+            "BANKNIFTY": "NSE_INDEX|Nifty Bank"
+        }
+        return mapping.get(symbol.upper(), "")
+    
+    async def get_available_expiries(self, symbol: str, token: str) -> List[str]:
+        """Get available expiries using correct instrument key for contracts"""
+        try:
+            # Use correct contract instrument key
+            instrument_key = self.get_contract_instrument_key(symbol)
+            if not instrument_key:
+                raise APIResponseError(f"Unknown symbol: {symbol}")
+            
+            logger.info(f"Fetching expiries for {symbol} using instrument_key: {instrument_key}")
+            
+            # Make API call for contracts
+            import urllib.parse
+            encoded_key = urllib.parse.quote(instrument_key, safe='')
+            url = f"https://api.upstox.com/v2/option/contract?instrument_key={encoded_key}"
+            
+            response = await self.client._make_request('get', url, access_token=token)
+            
+            if response.status_code != 200:
+                logger.error(f"Contract API returned status {response.status_code}")
+                raise APIResponseError(f"Failed to fetch contracts: {response.status_code}")
+            
+            # Extract unique expiry dates from real contracts
+            expiries_set = set()
+            for contract in response.data:
+                expiry = contract.get('expiry')
+                if expiry:
+                    expiries_set.add(expiry)
+            
+            expiries = sorted(list(expiries_set))
+            logger.info(f"Found {len(expiries)} expiries for {symbol}: {expiries[:5]}")
+            
+            return expiries
+            
+        except Exception as e:
+            logger.error(f"Failed to get expiries for {symbol}: {e}")
+            raise APIResponseError(f"Failed to get expiries: {e}")

@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from app.services.upstox_auth_service import get_upstox_auth_service
 from app.services.token_manager import get_token_manager
 from app.core.live_market_state import MarketStateManager
+from app.services.market_session_manager import get_market_session_manager, MarketSession, EngineMode, is_live_market
 from fastapi import HTTPException
 import httpx
 
@@ -43,6 +44,8 @@ class UpstoxMarketFeed:
         self.authorized_url = None
         self.is_running = False
         self.last_heartbeat = None
+        self.is_connected = False  # Add connection flag to prevent multiple connections
+        self.session_manager = None  # Will be set in start method
         
     async def get_authorized_websocket_url(self) -> Optional[str]:
         """
@@ -144,15 +147,16 @@ class UpstoxMarketFeed:
         """
         Connect to Upstox WebSocket feed
         """
+        # Prevent multiple connections
+        if self.is_connected:
+            logger.warning(f"Already connected to {self.config.symbol}, skipping connection attempt")
+            return True
+        
         try:
-            # STEP 6: VERIFY WEBSOCKETS VERSION
-            import websockets
-            logger.warning(f"Websockets version: {websockets.__version__}")
-            
             # Get authorized URL
             self.authorized_url = await self.get_authorized_websocket_url()
             if not self.authorized_url:
-                return None
+                return False
             
             logger.info(f"Connecting to Upstox feed: {self.config.symbol}")
             
@@ -195,6 +199,7 @@ class UpstoxMarketFeed:
                         ) as websocket:
                     logger.warning(f"WebSocket subprotocol selected: {websocket.subprotocol}")
                     self.websocket = websocket
+                    self.is_connected = True  # Set connection flag
                     logger.info(f"WebSocket connected successfully for {self.config.symbol}")
                     # Reset connection attempts on success
                     self.connection_attempts = 0
@@ -271,200 +276,60 @@ class UpstoxMarketFeed:
     
     async def get_active_strikes(self) -> List[str]:
         """
-        Get ATM ± strike range instruments to subscribe to
+        Get cached ATM ± strike range instruments to subscribe to
+        NO REST CALLS - Use cached data from market state to prevent re-authorization loops
+        FALLBACK TO BOOTSTRAP IF REST CHAIN NOT AVAILABLE
         """
         try:
-            # Check token validity first
-            self.token_manager.check()
-            
-            # Get current option chain to find ATM and active strikes
-            # Get valid access token with automatic refresh
-            access_token = await self.auth_service.get_valid_access_token()
-            if not access_token:
-                logger.error("No valid access token available for option chain")
-                self.token_manager.invalidate("No valid access token")
-                raise HTTPException(
-                    status_code=401,
-                    detail="Upstox authentication required"
-                )
-                
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json"
-            }
-            
-            # Get spot price first
-            if self.config.symbol.upper() == "BANKNIFTY":
-                # Use BankNifty instrument key for spot price
-                spot_url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key=NSE_INDEX|Bank Nifty"
-                spot_instrument_key = "NSE_INDEX|Bank Nifty"
-            else:
-                # Use Nifty instrument key for spot price
-                spot_url = f"https://api.upstox.com/v2/market-quote/ltp?instrument_key={self.config.spot_instrument_key}"
-            
-            async with httpx.AsyncClient() as client:
-                spot_response = await client.get(spot_url, headers=headers)
-                if spot_response.status_code == 401:
-                    logger.error("Upstox token revoked or expired (spot price)")
-                    self.token_manager.invalidate("Upstox token revoked or expired")
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Upstox authentication required"
-                    )
-                elif spot_response.status_code != 200:
-                    logger.error(f"Failed to get spot price: {spot_response.status_code} - {spot_response.text}")
-                    return []
-                
-                try:
-                    spot_data = spot_response.json()
-                    # Handle different response formats
-                    if "data" in spot_data:
-                        data = spot_data["data"]
-                        # Check for empty data (BankNifty case)
-                        if not data:
-                            logger.error(f"Empty spot data received for {self.config.symbol}")
-                            return []
-                        # Handle nested instrument key format (Nifty case)
-                        elif isinstance(data, dict) and len(data) == 1:
-                            # Extract the instrument data
-                            instrument_key = list(data.keys())[0]
-                            instrument_data = data[instrument_key]
-                            logger.warning(f"Found instrument data: {instrument_key} -> {instrument_data}")
-                            if "last_price" in instrument_data:
-                                spot_price = float(instrument_data["last_price"])
-                                logger.info(f"Successfully extracted spot price: {spot_price}")
-                            elif "ltp" in instrument_data:
-                                spot_price = float(instrument_data["ltp"])
-                                logger.info(f"Successfully extracted spot price (ltp): {spot_price}")
-                            else:
-                                logger.error(f"No last_price or ltp in instrument data: {instrument_data}")
-                                return []
-                        # Handle direct ltp format
-                        elif "ltp" in data:
-                            spot_price = float(data["ltp"])
-                            logger.info(f"Successfully extracted spot price (direct): {spot_price}")
-                        else:
-                            logger.error(f"Unexpected spot data format: {spot_data}")
-                            return []
-                    else:
-                        logger.error(f"Invalid spot data response: {spot_data}")
-                        return []
-                except Exception as json_error:
-                    logger.error(f"Failed to parse spot price JSON: {json_error}")
-                    return []
-            
-            # Get option chain to find active strikes
-            if self.config.symbol.upper() == "BANKNIFTY":
-                # Use BankNifty instrument key for option chain
-                chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Bank Nifty"
-            else:
-                # Use Nifty instrument key for option chain
-                chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key={self.config.spot_instrument_key}"
-                spot_instrument_key = self.config.spot_instrument_key
-            async with httpx.AsyncClient() as client:
-                spot_response = await client.get(spot_url, headers=headers)
-                if spot_response.status_code == 401:
-                    logger.error("Upstox token revoked or expired (spot price)")
-                    self.token_manager.invalidate("Upstox token revoked or expired")
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Upstox authentication required"
-                    )
-                elif spot_response.status_code != 200:
-                    logger.error(f"Failed to get spot price: {spot_response.status_code} - {spot_response.text}")
-                    return []
-                
-                try:
-                    spot_data = spot_response.json()
-                    # Handle different response formats
-                    if "data" in spot_data:
-                        if "ltp" in spot_data["data"]:
-                            spot_price = float(spot_data["data"]["ltp"])
-                        else:
-                            logger.error(f"Unexpected spot data format: {spot_data}")
-                            return []
-                    else:
-                        logger.error(f"Invalid spot data response: {spot_data}")
-                        return []
-                except Exception as json_error:
-                    logger.error(f"Failed to parse spot price JSON: {json_error}")
-                    return []
-            
-            # Get option chain to find active strikes
-            if self.config.symbol.upper() == "BANKNIFTY":
-                # Use BankNifty instrument key for option chain
-                chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Bank Nifty"
-            else:
-                # Use Nifty instrument key for option chain
-                chain_url = f"https://api.upstox.com/v2/option/chain?instrument_key=NSE_INDEX|Nifty 50"
-            
-            chain_response = await client.get(chain_url, headers=headers)
-            
-            if chain_response.status_code == 401:
-                logger.error("Upstox token revoked or expired (option chain)")
-                self.token_manager.invalidate("Upstox token revoked or expired")
-                raise HTTPException(
-                    status_code=401,
-                    detail="Upstox authentication required"
-                )
-            elif chain_response.status_code != 200:
-                logger.error(f"Failed to get option chain: {chain_response.status_code} - {chain_response.text}")
+            # Get current market state from our market state manager
+            symbol_state = await self.market_state.get_symbol_state(self.config.symbol)
+            if not symbol_state:
+                logger.error(f"No market state available for {self.config.symbol}")
                 return []
             
-            try:
-                chain_data = chain_response.json()
-            except Exception as json_error:
-                logger.error(f"Failed to parse option chain JSON: {json_error}")
+            # Use cached spot price from market state (WS preferred, REST fallback)
+            current_spot = symbol_state.ws_tick_price if symbol_state.ws_tick_price is not None else symbol_state.rest_spot_price
+            if not current_spot:
+                logger.error(f"No spot price available for {self.config.symbol}")
                 return []
             
-            # Find ATM strike and get range
-            all_strikes = []
-            for option_data in chain_data.get("data", []):
-                strike = option_data.get("strike_price", 0)
-                if strike > 0:
-                    all_strikes.append(strike)
+            # Use cached option chain from market state
+            cached_strikes = list(symbol_state.rest_option_chain.keys()) if symbol_state.rest_option_chain else []
             
-            if not all_strikes:
-                logger.error("No strikes found in option chain")
-                return []
-            
-            # Find ATM strike
-            if self.config.symbol.upper() == "BANKNIFTY":
-                # For BankNifty, we need to get BankNifty spot price
-                banknifty_url = f"https://api.upstox.com/v3/market-quote/ltp?instrument_key=NSE_INDEX|Bank Nifty"
-                async with httpx.AsyncClient() as client:
-                    banknifty_response = await client.get(banknifty_url, headers=headers)
-                    if banknifty_response.status_code == 401:
-                        logger.error("Upstox token revoked or expired (BankNifty spot price)")
-                        self.token_manager.invalidate("Upstox token revoked or expired")
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Upstox authentication required"
-                        )
-                    elif banknifty_response.status_code != 200:
-                        logger.error(f"Failed to get BankNifty spot price: {banknifty_response.status_code} - {banknifty_response.text}")
-                        return []
-                    
-                    try:
-                        banknifty_data = banknifty_response.json()
-                        if "data" in banknifty_data and "ltp" in banknifty_data["data"]:
-                            banknifty_spot_price = float(banknifty_data["data"]["ltp"])
-                        else:
-                            logger.error(f"Unexpected BankNifty spot data format: {banknifty_data}")
-                            return []
-                    except Exception as json_error:
-                        logger.error(f"Failed to parse BankNifty spot price JSON: {json_error}")
-                        return []
+            # BOOTSTRAP LOGIC: If no REST chain available, derive ATM from spot price
+            if not cached_strikes:
+                logger.warning(f"No REST option chain available for {self.config.symbol}, using bootstrap ATM calculation")
                 
-                # Use BankNifty spot price for ATM calculation
-                spot_price = banknifty_spot_price if 'banknifty_spot_price' in locals() else spot_price
-            else:
-                # Use Nifty spot price for ATM calculation
-                spot_price = spot_price
+                # Calculate bootstrap ATM using spot price and standard strike gaps
+                strike_gap = 50  # Standard NIFTY/BANKNIFTY strike gap
+                bootstrap_atm = round(current_spot / strike_gap) * strike_gap
+                
+                # Generate bootstrap strike range around bootstrap ATM
+                bootstrap_strikes = []
+                for i in range(-self.config.strike_range, self.config.strike_range + 1):
+                    strike = bootstrap_atm + (i * strike_gap)
+                    if strike > 0:  # Only positive strikes
+                        bootstrap_strikes.append(strike)
+                
+                # Convert to instrument keys
+                instrument_keys = [self.config.spot_instrument_key]  # Add spot
+                
+                # Add bootstrap option strikes
+                for strike in bootstrap_strikes:
+                    instrument_keys.append(f"NFO_FO|{strike}-CE")
+                    instrument_keys.append(f"NFO_FO|{strike}-PE")
+                
+                logger.info(f"Using {len(instrument_keys)} bootstrap instruments for {self.config.symbol} (ATM: {bootstrap_atm})")
+                return instrument_keys
             
-            # Get strike range (ATM ± configured range)
+            # NORMAL PATH: REST chain available, use cached data
+            # Find ATM from cached strikes
+            atm_strike = min(cached_strikes, key=lambda x: abs(x - current_spot))
+            logger.info(f"Using cached ATM strike: {atm_strike} (spot: {current_spot})")
+            
+            # Get strike range around ATM (ATM ± configured range)
             strike_range = []
-            for strike in all_strikes:
+            for strike in cached_strikes:
                 if abs(strike - atm_strike) <= (self.config.strike_range * 50):  # 50 point intervals
                     strike_range.append(strike)
             
@@ -481,52 +346,18 @@ class UpstoxMarketFeed:
             
             # Add option strikes
             for strike in strike_range:
-                # NFO options format
                 instrument_keys.append(f"NFO_FO|{strike}-CE")
                 instrument_keys.append(f"NFO_FO|{strike}-PE")
             
-            logger.info(f"Selected {len(instrument_keys)} instruments for {self.config.symbol} (ATM: {atm_strike})")
+            logger.info(f"Using {len(instrument_keys)} cached instruments for {self.config.symbol} (ATM: {atm_strike})")
             return instrument_keys
             
         except HTTPException:
             # Re-raise HTTPException (401) without modification
             raise
         except Exception as e:
-            logger.error(f"Error getting active strikes: {e}")
+            logger.error(f"Error getting cached active strikes: {e}")
             return []
-    
-    async def process_message(self, message: bytes) -> None:
-        """
-        Process incoming WebSocket message from Upstox
-        """
-        try:
-            # Decode protobuf message (placeholder - need actual proto implementation)
-            # For now, handle JSON messages during development
-            if isinstance(message, bytes):
-                try:
-                    decoded_message = message.decode('utf-8')
-                    data = json.loads(decoded_message)
-                except:
-                    # This would be protobuf decoding in production
-                    logger.debug("Received binary protobuf message")
-                    return
-            else:
-                data = message
-            
-            message_type = data.get("type")
-            
-            if message_type == "market_info":
-                logger.info("Received market status info")
-                self.last_heartbeat = datetime.now(timezone.utc)
-                
-            elif message_type == "live_feed":
-                await self.process_live_feed(data)
-                
-            else:
-                logger.debug(f"Unknown message type: {message_type}")
-                
-        except Exception as e:
-            logger.error(f"Error processing message: {e}")
     
     async def process_live_feed(self, data: Dict[str, Any]) -> None:
         """
@@ -558,8 +389,8 @@ class UpstoxMarketFeed:
                         "iv": greeks.get("iv")
                     })
                 
-                # Update market state
-                self.market_state.update_instrument_data(self.config.symbol, instrument_key, processed_data)
+                # Update market state using WebSocket-specific method
+                self.market_state.update_ws_tick_price(self.config.symbol, instrument_key, processed_data)
                 logger.debug(f"Updated market state for {self.config.symbol} - {instrument_key}: LTP={processed_data.get('ltp')}")
                 
         except Exception as e:
@@ -613,19 +444,85 @@ class UpstoxMarketFeed:
     
     async def start(self) -> None:
         """
-        Start the market feed service
+        Start the market feed service with market status integration
         """
+        self.session_manager = await get_market_session_manager()
+        
+        # Register for market status changes
+        await self.session_manager.register_status_callback(self._on_market_status_change)
+        
+        # Check current market status
+        current_status = self.session_manager.get_market_status().value
+        
+        if not is_live_market(current_status):
+            logger.info(f"NSE not live ({current_status}), switching to REST snapshot mode")
+            self.is_running = False
+            return
+        
         self.is_running = True
-        logger.info(f"Starting Upstox market feed for {self.config.symbol}")
+        logger.info(f"Starting Upstox market feed for {self.config.symbol} (Market: {current_status})")
         
         # Run feed loop in background
         asyncio.create_task(self.run_feed_loop())
     
+    async def _on_market_status_change(self, status: MarketSession, mode: EngineMode):
+        """Handle market status changes"""
+        logger.info(f"Market status changed: {status.value} ({mode.value})")
+        
+        if is_live_market(status.value) and mode == EngineMode.LIVE:
+            # Market opened - start WebSocket feed
+            if not self.is_running:
+                logger.info("Market opened - starting WebSocket feed")
+                self.is_running = True
+                asyncio.create_task(self.run_feed_loop())
+        else:
+            # Market closed/halted - stop WebSocket feed
+            if self.is_running:
+                logger.info(f"Market {status.value} - stopping WebSocket feed")
+                await self.stop()
+    
+    async def can_start_websocket(self) -> bool:
+        """Check if WebSocket feed can be started based on market status"""
+        if not self.session_manager:
+            self.session_manager = await get_market_session_manager()
+        
+        current_status = self.session_manager.get_market_status().value
+        return is_live_market(current_status) and self.session_manager.get_engine_mode() == EngineMode.LIVE
+    
+    async def resync_subscriptions(self) -> None:
+        """
+        Resync WebSocket subscriptions when REST option chain becomes available
+        """
+        try:
+            logger.info(f"Resyncing subscriptions for {self.config.symbol}")
+            
+            # Get new instrument list with updated REST chain
+            new_instrument_keys = await self.get_active_strikes()
+            
+            if new_instrument_keys and self.websocket:
+                # Send new subscription message
+                subscription_message = {
+                    "guid": f"strikeiq_resync_{int(datetime.now().timestamp())}",
+                    "method": "sub",
+                    "data": {
+                        "mode": self.config.mode,
+                        "instrumentKeys": new_instrument_keys
+                    }
+                }
+                
+                message_bytes = json.dumps(subscription_message).encode('utf-8')
+                await self.websocket.send(message_bytes)
+                logger.info(f"Resubscribed to {len(new_instrument_keys)} instruments for {self.config.symbol}")
+            
+        except Exception as e:
+            logger.error(f"Error resyncing subscriptions: {e}")
+
     async def stop(self) -> None:
         """
         Stop the market feed service
         """
         self.is_running = False
+        self.is_connected = False  # Reset connection flag
         if self.websocket:
             try:
                 await self.websocket.close()

@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
+import asyncio
 import uvicorn
 import os
 import sys
@@ -12,7 +13,6 @@ import sys
 from app.core.config import settings
 from app.models.database import get_db
 from app.services.market_dashboard_service import MarketDashboardService
-from app.market_data import start_data_scheduler, stop_data_scheduler
 from app.market_data.market_data_service import get_latest_option_chain
 from app.api.v1 import (
     auth_router,
@@ -22,7 +22,9 @@ from app.api.v1 import (
     predictions_router,
     debug_router,
     intelligence_router,
-    live_ws_router
+    market_session_router,  # Add market session router
+    # RE-ENABLED: WebSocket router for live streaming
+    live_ws_router,
 )
 
 # Configure logging with file output
@@ -66,18 +68,123 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting StrikeIQ API...")
     
-    # Start data scheduler
-    try:
-        await start_data_scheduler()
-        logger.info("Data scheduler started successfully")
-    except Exception as e:
-        logger.warning(f"Failed to start data scheduler: {str(e)}")
+    # Start market session monitoring
+    asyncio.create_task(start_market_session_manager(app))
+    
+    # RE-ENABLED: Start WebSocket streaming for live market data
+    asyncio.create_task(start_market_feed(app))
     
     yield
     
     # Shutdown
     logger.info("Shutting down StrikeIQ API...")
-    await stop_data_scheduler()
+    await stop_market_session_manager(app)
+    await stop_data_scheduler(app)
+
+
+async def start_market_session_manager(app: FastAPI):
+    """Start market session monitoring"""
+    try:
+        from app.services.market_session_manager import get_market_session_manager
+        
+        logger.info("Starting market session manager...")
+        session_manager = await get_market_session_manager()
+        
+        # Start status monitoring
+        await session_manager.start_status_monitoring()
+        
+        # Store in app state for global access
+        app.state.market_session_manager = session_manager
+        
+        logger.info("✅ Market session manager started")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start market session manager: {e}")
+
+
+async def stop_market_session_manager(app: FastAPI):
+    """Stop market session monitoring"""
+    try:
+        if hasattr(app.state, 'market_session_manager'):
+            await app.state.market_session_manager.stop_status_monitoring()
+            await app.state.market_session_manager.cleanup()
+            logger.info("Market session manager stopped")
+        
+    except Exception as e:
+        logger.error(f"Error stopping market session manager: {e}")
+
+
+async def start_market_feed(app: FastAPI):
+    """Start Upstox V3 WebSocket market feed for live streaming"""
+    try:
+        from app.services.upstox_market_feed import UpstoxMarketFeed, FeedConfig
+        from app.core.live_market_state import MarketStateManager
+        
+        logger.info("Initializing Upstox V3 WebSocket market feed...")
+        
+        # Global market state manager
+        market_state_manager = MarketStateManager()
+        
+        # Store market state manager in app state for global access
+        app.state.market_state = market_state_manager
+        
+        # Initialize symbol states before starting feeds to prevent None returns
+        symbols = ["NIFTY", "BANKNIFTY"]
+        for symbol in symbols:
+            await market_state_manager.initialize_symbol(symbol)
+        
+        # Start feeds for NIFTY and BANKNIFTY
+        instrument_keys = {
+            "NIFTY": "NSE_INDEX|Nifty 50",
+            "BANKNIFTY": "NSE_INDEX|Nifty Bank"
+        }
+        
+        for symbol in symbols:
+            try:
+                config = FeedConfig(
+                    symbol=symbol,
+                    spot_instrument_key=instrument_keys[symbol],
+                    strike_range=10,
+                    mode="full"
+                )
+                
+                feed = UpstoxMarketFeed(config, market_state_manager)
+                logger.info(f"Starting Upstox feed for {symbol}...")
+                await feed.start()
+                
+                # Store feed globally for WebSocket access
+                if not hasattr(app.state, 'upstox_feeds'):
+                    app.state.upstox_feeds = {}
+                app.state.upstox_feeds[symbol] = feed
+                
+                logger.info(f"✅ Upstox feed started for {symbol}")
+                
+            except Exception as e:
+                logger.error(f"❌ Failed to start feed for {symbol}: {e}")
+                continue
+        
+        logger.info("🚀 Upstox V3 WebSocket market feed initialization complete")
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to start market feed: {e}")
+
+
+async def stop_data_scheduler(app: FastAPI):
+    """Stop data scheduler and WebSocket feeds"""
+    try:
+        # Stop WebSocket feeds if they exist
+        if hasattr(app.state, 'upstox_feeds'):
+            for symbol, feed in app.state.upstox_feeds.items():
+                try:
+                    await feed.stop()
+                    logger.info(f"Stopped Upstox feed for {symbol}")
+                except Exception as e:
+                    logger.error(f"Error stopping feed for {symbol}: {e}")
+        
+        logger.info("Data scheduler and feeds stopped")
+        
+    except Exception as e:
+        logger.error(f"Error stopping data scheduler: {e}")
 
 
 app = FastAPI(
@@ -95,6 +202,8 @@ app.include_router(system_router)
 app.include_router(predictions_router)
 app.include_router(debug_router)
 app.include_router(intelligence_router)
+app.include_router(market_session_router)  # Add market session router
+# RE-ENABLED: WebSocket router for live streaming
 app.include_router(live_ws_router)
 
 # CORS middleware - Fixed for WebSocket support
@@ -125,10 +234,6 @@ for route in app.routes:
         route_type = getattr(route, 'methods', 'N/A')
         logger.info(f"Route: {route.path} | Methods: {route_type} | Type: {type(route).__name__}")
         
-        # Specifically check for WebSocket routes
-        if hasattr(route, 'path') and 'ws' in route.path:
-            logger.info(f"🔌 WEBSOCKET ROUTE FOUND: {route.path}")
-            
 logger.info("=== END ROUTES ===")
 
 
@@ -137,30 +242,9 @@ async def root():
     return {"message": "StrikeIQ API is running", "version": "2.0.0"}
 
 
-# Add simple WebSocket test directly to main app
-@app.websocket("/ws/simple-test")
-async def simple_websocket_test(websocket: WebSocket):
-    """Simple WebSocket test endpoint"""
-    print(f"🔌 WebSocket connection attempt to /ws/simple-test")
-    try:
-        await websocket.accept()
-        print(f"✅ WebSocket accepted for /ws/simple-test")
-        await websocket.send_text("Hello from simple WebSocket!")
-        print(f"📨 Message sent to /ws/simple-test")
-        await websocket.close()
-        print(f"🔌 WebSocket closed for /ws/simple-test")
-    except Exception as e:
-        print(f"❌ WebSocket error in /ws/simple-test: {e}")
-        await websocket.close()
-
-@app.get("/ws-test")
-async def ws_test():
-    """Test endpoint to verify server is running"""
-    return {"message": "WebSocket test endpoint working", "timestamp": datetime.now().isoformat()}
-
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "timestamp": "2024-01-10T14:30:00Z"}
+    return {"status": "healthy", "timestamp": datetime.now().isoformat()}
 
 
 @app.get("/api/dashboard/{symbol}")
@@ -232,36 +316,10 @@ async def upstox_auth_callback(code: str = Query(None)):
         raise HTTPException(status_code=500, detail="Authentication failed")
 
 
-@app.get("/api/v1/status/data-collection")
-async def get_data_collection_status():
-    """Get data collection status"""
-    try:
-        from app.market_data import get_data_scheduler
-        scheduler = get_data_scheduler()
-        status = await scheduler.get_collection_status()
-        return status
-    except Exception as e:
-        logger.error(f"Error getting data collection status: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to get status")
-
-
-@app.post("/api/v1/trigger/data-collection")
-async def trigger_data_collection(symbol: str = None):
-    """Trigger manual data collection"""
-    try:
-        from app.market_data import get_data_scheduler
-        scheduler = get_data_scheduler()
-        results = await scheduler.trigger_manual_collection(symbol)
-        return {"message": "Data collection triggered", "results": results}
-    except Exception as e:
-        logger.error(f"Error triggering data collection: {str(e)}")
-        raise HTTPException(status_code=500, detail="Failed to trigger data collection")
-
-
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
-        port=8000,
+        port=8001,  # Changed port from 8000 to 8001
         reload=True
     )

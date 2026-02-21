@@ -138,7 +138,7 @@ async def get_option_contracts(
     db: Session = Depends(get_db)
 ):
     """Get available option contracts/expiries for a symbol"""
-    # 🔍 AUDIT: Contract endpoint re-enabled for expiry metadata (cached)
+    # AUDIT: Contract endpoint re-enabled for expiry metadata (cached)
     logger.info(f"=== AUDIT: Contract endpoint called for {symbol} ===")
     
     try:
@@ -154,12 +154,21 @@ async def get_option_contracts(
         if not token:
             raise HTTPException(status_code=401, detail="No access token available")
         
-        # Get instrument key for options (NSE_FO namespace)
+        # Get instrument key for options contracts (use correct contract mapping)
         try:
-            logger.info(f"=== AUDIT: Getting instrument key for {symbol} ===")
+            logger.info(f"=== AUDIT: Getting contract instrument key for {symbol} ===")
+            instrument_key = service.get_contract_instrument_key(symbol)
+            logger.info(f"=== AUDIT: Got instrument key: {instrument_key} for {symbol} ===")
+            logger.info(f"=== AUDIT: Service instance: {service} ===")
+            logger.info(f"=== AUDIT: Service methods: {[method for method in dir(service) if not method.startswith('_')]} ===")
+            logger.info(f"=== AUDIT: Service type: {type(service)} ===")
+        except AttributeError as attr_error:
+            logger.error(f"=== AUDIT: Method get_contract_instrument_key not found: {attr_error} ===")
+            # Fallback to old method
             instrument_key = await service._get_instrument_key(symbol)
+            logger.info(f"=== AUDIT: Using fallback instrument key: {instrument_key} ===")
         except Exception as e:
-            logger.error(f"=== AUDIT: Error getting instrument key: {e} ===")
+            logger.error(f"=== AUDIT: Error getting contract instrument key: {e} ===")
             raise HTTPException(status_code=500, detail=f"Failed to get instrument key: {e}")
         
         # Fetch option contracts using Upstox client directly
@@ -188,17 +197,20 @@ async def get_option_contracts(
                 logger.error(f"=== AUDIT: Unexpected response format: {type(data)} ===")
                 contracts = []
             
-            # Extract unique expiry dates
+            # Extract unique expiry dates from the contracts we already fetched
             expiries_set = set()
             if isinstance(contracts, list):
+                logger.info(f"=== AUDIT: Processing {len(contracts)} contracts for expiries ===")
                 for contract in contracts:
                     if isinstance(contract, dict):
                         expiry = contract.get('expiry')
                         if expiry:
                             expiries_set.add(expiry)
+            else:
+                logger.error(f"=== AUDIT: Contracts is not a list: {type(contracts)} ===")
             
-            # Convert set to sorted list
             expiries = sorted(list(expiries_set))
+            logger.info(f"=== AUDIT: Found {len(expiries)} expiries for {symbol} ===")
             
             logger.info(f"=== AUDIT: Returning {len(expiries)} expiries for {symbol} ===")
             
@@ -213,12 +225,12 @@ async def get_option_contracts(
             
     except HTTPException as e:
         # Re-raise HTTPException without modification
-        print(f"🔍 DEBUG: HTTPException caught in contract API: {e.status_code}")
+        print(f"DEBUG: HTTPException caught in contract API: {e.status_code}")
         logger.info(f"Returning status code: {e.status_code}")
         logger.error(f"HTTPException in contract API: {e.status_code} - {e.detail}")
         raise e
     except Exception as e:
-        print(f"🔍 DEBUG: Generic exception caught in contract API: {e}")
+        print(f"DEBUG: Generic exception caught in contract API: {e}")
         logger.exception("Unexpected internal error in contract API")
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -264,12 +276,12 @@ async def get_option_chain(
         
     except HTTPException as e:
         # Re-raise HTTPException without modification
-        print(f"🔍 DEBUG: HTTPException caught in v1 options API: {e.status_code}")
+        print(f"DEBUG: HTTPException caught in v1 options API: {e.status_code}")
         logger.info(f"Returning status code: {e.status_code}")
         logger.error(f"HTTPException in option chain API: {e.status_code} - {e.detail}")
         raise e
     except Exception as e:
-        print(f"🔍 DEBUG: Generic exception caught in v1 options API: {e}")
+        print(f"DEBUG: Generic exception caught in v1 options API: {e}")
         logger.exception("Unexpected internal error in option chain API")
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -303,12 +315,12 @@ async def get_oi_analysis(
         
     except HTTPException as e:
         # Re-raise HTTPException without modification
-        print(f"🔍 DEBUG: HTTPException caught in OI analysis API: {e.status_code}")
+        print(f"DEBUG: HTTPException caught in OI analysis API: {e.status_code}")
         logger.info(f"Returning status code: {e.status_code}")
         logger.error(f"HTTPException in OI analysis API: {e.status_code} - {e.detail}")
         raise e
     except Exception as e:
-        print(f"🔍 DEBUG: Generic exception caught in OI analysis API: {e}")
+        print(f"DEBUG: Generic exception caught in OI analysis API: {e}")
         logger.exception("Unexpected internal error in OI analysis API")
         raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -376,12 +388,12 @@ async def get_greeks(
         
     except HTTPException as e:
         # Re-raise HTTPException without modification
-        print(f"🔍 DEBUG: HTTPException caught in Greeks API: {e.status_code}")
+        print(f"DEBUG: HTTPException caught in Greeks API: {e.status_code}")
         logger.info(f"Returning status code: {e.status_code}")
         logger.error(f"HTTPException in Greeks API: {e.status_code} - {e.detail}")
         raise e
     except Exception as e:
-        print(f"🔍 DEBUG: Generic exception caught in Greeks API: {e}")
+        print(f"DEBUG: Generic exception caught in Greeks API: {e}")
         logger.exception("Unexpected internal error in Greeks API")
         raise HTTPException(status_code=500, detail="Internal server error")
 

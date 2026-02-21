@@ -9,6 +9,9 @@ class Settings:
     LOG_LEVEL: str = "INFO"
     ALLOWED_HOSTS: List[str] = ["http://localhost:3000", "http://localhost:8000", "ws://localhost:3000", "ws://localhost:8000"]
     
+    # Environment setting
+    ENVIRONMENT: str = os.getenv('ENVIRONMENT', 'development')
+    
     # Load with fallback to empty string - SECURITY: No hardcoded credentials
     UPSTOX_API_KEY: str = os.getenv('UPSTOX_API_KEY', "")
     UPSTOX_API_SECRET: str = os.getenv('UPSTOX_API_SECRET', "")

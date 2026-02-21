@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import api from '../src/lib/api';
+import api from '../lib/api';
 import StructuralBanner from '../components/intelligence/StructuralBannerFinal';
 import ConvictionPanel from '../components/intelligence/ConvictionPanelFinal';
 import GammaPressurePanel from '../components/intelligence/GammaPressurePanelFinal';
@@ -34,190 +34,154 @@ interface WebSocketData {
 }
 
 const IntelligenceDashboard: React.FC = () => {
-  const [wsData, setWsData] = useState<WebSocketData | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-
+  // Use REST-based market data hook instead of WebSocket
+  const marketData = useLiveMarketData('NIFTY', null);
+  
+  const [regimeHistory, setRegimeHistory] = useState<string[]>([]);
+  
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/live-options/NIFTY');
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      setIsLoading(false);
-      console.log('Connected to StrikeIQ Intelligence Engine');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        // Handle authentication required
-        if (data.status === 'auth_required') {
-          console.warn('🔐 Authentication required - redirecting to auth screen');
-          
-          // Close WebSocket
-          ws.close();
-          
-          // Clear any stored auth data
-          localStorage.removeItem("upstox_auth")
-          sessionStorage.removeItem("upstox_auth")
-          
-          // Redirect to auth screen
-          window.location.href = "/auth"
-          return
-        }
-        
-        if (data.status === 'live_update') {
-          setWsData(data);
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket data:', error);
-      }
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      console.log('Disconnected from StrikeIQ Intelligence Engine');
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setIsConnected(false);
-      setIsLoading(false);
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, []);
-
-  // Calculate derived metrics for conviction panel
-  const conviction = wsData?.regime_confidence || 0;
-  const directionalPressure = wsData?.flow_imbalance ? wsData.flow_imbalance * 100 : 0;
-  const instabilityIndex = wsData?.regime_dynamics?.transition_probability ? 
-    wsData.regime_dynamics.transition_probability : 0;
-
+    // Update regime history when market data changes
+    if (marketData.data && marketData.data.intelligence) {
+      setRegimeHistory(prev => [...prev, marketData.data.intelligence]);
+    }
+  }, [marketData.data]);
+  
   // Loading state
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-black text-white flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-16 h-16 bg-gray-800 rounded-full animate-pulse mb-4"></div>
-          <div className="text-xl font-semibold mb-2">Initializing Intelligence Engine</div>
-          <div className="text-gray-400">Loading market analytics...</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Connection error state
-  if (!isConnected) {
+  if (marketData.loading) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
           <div className="w-16 h-16 border-4 border-gray-700 border-t-red-500 rounded-full animate-spin mb-4"></div>
-          <div className="text-xl font-semibold mb-2">Connecting to StrikeIQ</div>
-          <div className="text-gray-400">Establishing secure connection...</div>
+          <div className="text-xl font-semibold mb-2">Loading market analytics...</div>
         </div>
       </div>
     );
   }
-
+  
+  // Error state
+  if (marketData.error) {
+    return (
+      <div className="min-h-screen bg-black text-white flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-gray-700 rounded-full mb-4">
+            <div className="text-red-500 text-xl mb-2">⚠️ Error</div>
+            <div className="text-gray-300">{marketData.error}</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  
+  // Success state with data
   return (
     <div className="min-h-screen bg-black text-white">
       {/* STRUCTURAL REGIME BANNER (FULL WIDTH) */}
       <div className="p-6 pb-0">
         <StructuralBanner
-          regime={wsData?.structural_regime || 'unknown'}
-          confidence={wsData?.regime_confidence || 0}
-          stability={wsData?.regime_dynamics?.stability_score || wsData?.regime_stability || 0}
-          acceleration={wsData?.regime_dynamics?.acceleration_index || wsData?.acceleration_index || 0}
+          regime={marketData.data?.intelligence?.structural_regime || 'unknown'}
+          confidence={marketData.data?.intelligence?.regime_confidence || 0}
+          stability={marketData.data?.intelligence?.regime_stability || 0}
+          acceleration={marketData.data?.intelligence?.acceleration_index || 0}
         />
       </div>
-
+      
       {/* INTELLIGENCE SCORE CARDS */}
       <div className="px-6 pb-6">
-        <ConvictionPanel
-          conviction={conviction}
-          directionalPressure={directionalPressure}
-          instabilityIndex={instabilityIndex}
-        />
-      </div>
-
-      {/* MAIN GRID LAYOUT */}
-      <div className="px-6 pb-6">
         <div className="grid grid-cols-12 gap-6">
-          {/* Gamma Pressure Map (60%) */}
+          {/* Conviction Panel */}
           <div className="col-span-8">
-            <GammaPressurePanel
-              pressureMap={wsData?.gamma_pressure_map || {}}
-              spot={wsData?.spot || 0}
+            <ConvictionPanel conviction={marketData.data?.intelligence?.conviction || 0} />
+          </div>
+          
+          {/* Main Intelligence Display */}
+          <div className="col-span-4">
+            <div className="bg-white/10 backdrop-blur-sm rounded-lg border border-gray-700 p-6">
+              <div className="text-2xl font-bold text-center mb-4">
+                StrikeIQ Intelligence Engine
+              </div>
+              <div className="text-gray-600 text-center mb-6">
+                Analyzing market patterns in real-time
+              </div>
+              
+              {/* Display market data when available */}
+              {marketData.data && (
+                <div className="space-y-4">
+                  <div className="text-center">
+                    <div className="text-3xl font-bold text-green-400">
+                      NIFTY
+                    </div>
+                    <div className="text-5xl font-bold text-gray-300">
+                      {marketData.data.spot?.toLocaleString()}
+                    </div>
+                    <div className="text-lg text-gray-400">
+                      Change: {marketData.data.change?.toFixed(2)}%
+                    </div>
+                  </div>
+                  
+                  {/* Key Intelligence Metrics */}
+                  <div className="grid grid-cols-2 gap-4 mt-6">
+                    <div className="text-center">
+                      <div className="text-lg font-semibold text-gray-400">Market Bias</div>
+                      <div className="text-2xl font-bold">
+                        {marketData.data.intelligence?.market_bias || 'NEUTRAL'}
+                      </div>
+                    </div>
+                    
+                    <div className="text-center">
+                      <div className="text-lg font-semibold text-gray-400">Pin Probability</div>
+                      <div className="text-2xl font-bold">
+                        {(marketData.data.intelligence?.pin_probability * 100)?.toFixed(1)}%
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+          
+          {/* Other Panels */}
+          <div className="col-span-4">
+            <GammaPressurePanel 
+              pressureMap={marketData.data?.intelligence?.gamma_pressure_map || {}}
+              spot={marketData.data.spot || 0}
             />
           </div>
-
-          {/* Alerts Panel (40%) */}
+          
           <div className="col-span-4">
-            <AlertPanel
-              alerts={wsData?.alerts || []}
+            <AlertPanel 
+              alerts={marketData.data?.intelligence?.alerts || []}
               maxVisible={5}
             />
           </div>
-        </div>
-      </div>
-
-      {/* FLOW + GAMMA INTERACTION PANEL */}
-      <div className="px-6 pb-6">
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-12">
-            <InteractionPanel
-              interaction={wsData?.flow_gamma_interaction || {}}
+          
+          <div className="col-span-4">
+            <InteractionPanel 
+              interaction={marketData.data?.intelligence?.flow_gamma_interaction || {}}
+            />
+          </div>
+          
+          <div className="col-span-4">
+            <RegimeDynamicsPanel 
+              dynamics={marketData.data?.intelligence?.regime_dynamics || {}}
+            />
+          </div>
+          
+          <div className="col-span-4">
+            <ExpiryPanel 
+              expiryAnalysis={marketData.data?.intelligence?.expiry_magnet_analysis || {}}
             />
           </div>
         </div>
       </div>
-
-      {/* REGIME DYNAMICS PANEL */}
-      <div className="px-6 pb-6">
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-12">
-            <RegimeDynamicsPanel
-              dynamics={wsData?.regime_dynamics || {}}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* EXPIRY INTELLIGENCE PANEL */}
-      <div className="px-6 pb-6">
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-12">
-            <ExpiryPanel
-              expiryAnalysis={wsData?.expiry_magnet_analysis || {}}
-            />
-          </div>
-        </div>
-      </div>
-
-      {/* IOHEATMAP (UNCHANGED, BOTTOM) */}
-      <div className="px-6 pb-6">
-        <div className="grid grid-cols-12 gap-6">
-          <div className="col-span-12">
-            {/* <IOHeatmap /> */} {/* Uncomment when IOHeatmap path is correct */}
-            <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-2xl p-6 text-center text-gray-400">
-              IOHeatmap Component (Unchanged)
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* CONNECTION STATUS INDICATOR */}
+      
+      {/* Connection Status */}
       <div className="fixed bottom-4 right-4 z-50">
         <div className={`px-3 py-2 rounded-full text-xs font-medium backdrop-blur-sm ${
-          isConnected 
+          marketData.isConnected 
             ? 'bg-green-500/20 border border-green-500/40 text-green-400' 
             : 'bg-red-500/20 border border-red-500/40 text-red-400'
         }`}>
-          {isConnected ? '🟢 LIVE' : '🔴 OFFLINE'}
+          {marketData.isConnected ? '🟢 LIVE' : '🔴 OFFLINE'}
         </div>
       </div>
     </div>

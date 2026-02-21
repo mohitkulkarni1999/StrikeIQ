@@ -5,6 +5,9 @@ self.__BUILD_MANIFEST = {
   "/auth": [
     "static/chunks/pages/auth.js"
   ],
+  "/auth/success": [
+    "static/chunks/pages/auth/success.js"
+  ],
   "__rewrites": {
     "afterFiles": [
       {

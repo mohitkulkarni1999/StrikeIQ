@@ -59,7 +59,7 @@ const ExpiryPanel: React.FC<ExpiryPanelProps> = ({ expiryAnalysis }) => {
   };
 
   const getMagnetStrengthColor = (strength: number) => {
-    if (strength >= 80) return 'text-purple-400';
+    if (strength >= 80) return 'text-analytics-400';
     if (strength >= 60) return 'text-blue-400';
     if (strength >= 40) return 'text-cyan-400';
     return 'text-gray-400';
@@ -76,7 +76,7 @@ const ExpiryPanel: React.FC<ExpiryPanelProps> = ({ expiryAnalysis }) => {
     <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-2xl p-6 shadow-lg">
       <div className="flex items-center justify-between mb-6">
         <h3 className="text-xl font-semibold text-white flex items-center">
-          <Calendar className="w-5 h-5 mr-3 text-purple-400" />
+          <Calendar className="w-5 h-5 mr-3 text-analytics-400" />
           Expiry Intelligence
         </h3>
         
@@ -124,7 +124,7 @@ const ExpiryPanel: React.FC<ExpiryPanelProps> = ({ expiryAnalysis }) => {
         <div className="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
           <div className="flex items-center justify-between mb-3">
             <h4 className="text-sm font-medium text-gray-300">Magnet Strength</h4>
-            <Magnet className="w-4 h-4 text-purple-400" />
+            <Magnet className="w-4 h-4 text-analytics-400" />
           </div>
           
           <div className="flex items-center space-x-3">
@@ -137,7 +137,7 @@ const ExpiryPanel: React.FC<ExpiryPanelProps> = ({ expiryAnalysis }) => {
               <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
                 <div 
                   className={`h-full transition-all duration-500 ${
-                    expiryAnalysis.magnet_strength >= 80 ? 'bg-purple-500' :
+                    expiryAnalysis.magnet_strength >= 80 ? 'bg-analytics-500' :
                     expiryAnalysis.magnet_strength >= 60 ? 'bg-blue-500' :
                     expiryAnalysis.magnet_strength >= 40 ? 'bg-cyan-500' : 'bg-gray-500'
                   }`}

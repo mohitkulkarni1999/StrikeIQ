@@ -30,58 +30,23 @@ interface WebSocketData {
 }
 
 const IntelligenceDashboard: React.FC = () => {
-  const [wsData, setWsData] = useState<WebSocketData | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+  // Use REST-based market data hook instead of WebSocket
+  const marketData = useLiveMarketData('NIFTY', null);
+  
   const [regimeHistory, setRegimeHistory] = useState<string[]>([]);
-
+  
   useEffect(() => {
-    const ws = new WebSocket('ws://localhost:8000/ws/live-options/NIFTY');
-
-    ws.onopen = () => {
-      setIsConnected(true);
-      console.log('Connected to StrikeIQ Intelligence Engine');
-    };
-
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        
-        if (data.status === 'live_update') {
-          setWsData(data);
-          
-          // Track regime changes
-          if (data.structural_regime) {
-            setRegimeHistory(prev => {
-              const newHistory = [...prev, data.structural_regime];
-              return newHistory.slice(-10); // Keep last 10 regimes
-            });
-          }
-        }
-      } catch (error) {
-        console.error('Error parsing WebSocket data:', error);
-      }
-    };
-
-    ws.onclose = () => {
-      setIsConnected(false);
-      console.log('Disconnected from StrikeIQ Intelligence Engine');
-    };
-
-    ws.onerror = (error) => {
-      console.error('WebSocket error:', error);
-      setIsConnected(false);
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, []);
+    // Update regime history when market data changes
+    if (marketData.data && marketData.data.intelligence) {
+      setRegimeHistory(prev => [...prev, marketData.data.intelligence]);
+    }
+  }, [marketData.data]);
 
   // Calculate derived metrics for conviction panel
-  const conviction = wsData?.regime_confidence || 0;
-  const directionalPressure = wsData?.flow_imbalance ? wsData.flow_imbalance * 100 : 0;
-  const instabilityIndex = wsData?.regime_dynamics?.transition_probability ? 
-    wsData.regime_dynamics.transition_probability : 0;
+  const conviction = marketData.data?.intelligence?.regime_confidence || 0;
+  const directionalPressure = marketData.data?.intelligence?.flow_imbalance ? marketData.data.intelligence.flow_imbalance * 100 : 0;
+  const instabilityIndex = marketData.data?.intelligence?.regime_dynamics?.transition_probability ? 
+    marketData.data.intelligence.regime_dynamics.transition_probability : 0;
 
   const handleRegimeChange = (newRegime: string) => {
     console.log('Regime changed to:', newRegime);

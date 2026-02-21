@@ -113,6 +113,10 @@ class UpstoxAuthService:
     def exchange_code_for_token(self, code: str) -> dict:
         """Exchange authorization code for access token"""
         try:
+            logger.info(f"Attempting to exchange code for token")
+            logger.info(f"Using API key: {settings.UPSTOX_API_KEY[:8]}...")
+            logger.info(f"Redirect URI: {settings.REDIRECT_URI}")
+            
             url = "https://api.upstox.com/v2/login/authorization/token"
             headers = {
                 "accept": "application/json",
@@ -126,10 +130,22 @@ class UpstoxAuthService:
                 "grant_type": "authorization_code"
             }
             
+            logger.info(f"Making token exchange request to: {url}")
             response = httpx.post(url, headers=headers, data=data)
+            
+            # Log response status for debugging
+            logger.info(f"Token exchange response status: {response.status_code}")
+            
+            if response.status_code != 200:
+                logger.error(f"Token exchange failed with status {response.status_code}")
+                logger.error(f"Response body: {response.text}")
+                raise Exception(f"Token exchange failed: {response.status_code} - {response.text}")
+            
             response.raise_for_status()
             
             token_data = response.json()
+            logger.info(f"Token exchange successful, received keys: {list(token_data.keys())}")
+            
             # SECURITY: Remove debug logging - Never log tokens
             credentials = UpstoxCredentials(
                 token_data.get("access_token"),
@@ -139,7 +155,7 @@ class UpstoxAuthService:
             self._store_credentials(credentials)
             
             # Validate TokenManager after successful authentication
-            from ..token_manager import get_token_manager
+            from .token_manager import get_token_manager
             token_manager = get_token_manager()
             token_manager.validate()
             
