@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
 import numpy as np
+from ..exceptions.data_unavailable_error import DataUnavailableError, MissingOIError
 
 logger = logging.getLogger(__name__)
 
@@ -140,38 +141,28 @@ class MarketBiasEngine:
             self.historical_oi[symbol].append({
                 "timestamp": time.time(),
                 "oi": current_total_oi
-            })
-            
-            # Keep only last 5 minutes of data
-            cutoff_time = time.time() - 300  # 5 minutes ago
-            self.historical_oi[symbol] = [
-                entry for entry in self.historical_oi[symbol]
-                if entry["timestamp"] > cutoff_time
-            ]
-            
-            # Calculate velocity
-            if len(self.historical_oi[symbol]) >= 2:
-                oldest = self.historical_oi[symbol][0]["oi"]
-                newest = self.historical_oi[symbol][-1]["oi"]
-                return newest - oldest
-            
-            return 0
             
         except Exception as e:
             logger.error(f"Error calculating OI velocity: {e}")
-            return 0
+            raise DataUnavailableError(f"OI velocity calculation failed: {e}")
     
     def _calculate_pcr(self, calls: List[Dict], puts: List[Dict]) -> float:
         """Calculate Put-Call Ratio"""
         try:
+            if not calls or not puts:
+                raise MissingOIError("Empty calls/puts data for PCR calculation")
+            
             total_call_oi = sum(call.get("open_interest", 0) for call in calls)
             total_put_oi = sum(put.get("open_interest", 0) for put in puts)
+            
+            if total_call_oi == 0 and total_put_oi == 0:
+                raise MissingOIError("No OI data available for PCR calculation")
             
             return total_put_oi / total_call_oi if total_call_oi > 0 else 1.0
             
         except Exception as e:
             logger.error(f"Error calculating PCR: {e}")
-            return 1.0
+            raise DataUnavailableError(f"PCR calculation failed: {e}")
     
     def _detect_divergence(self, price_vs_vwap: float, pcr: float, oi_change: float) -> tuple[bool, str]:
         """Detect bullish/bearish divergence"""

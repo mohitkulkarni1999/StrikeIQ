@@ -264,6 +264,12 @@ async def get_option_chain(
             logger.error(f"=== INVESTIGATION: Service returned error: {chain_data} ===")
             raise HTTPException(status_code=500, detail=chain_data.get("error", "Unknown error"))
         
+        # Check if analytics are disabled due to engine failures
+        if isinstance(chain_data, dict) and not chain_data.get("analytics_enabled", True):
+            logger.warning(f"=== INVESTIGATION: Analytics disabled in service response: {chain_data.get('engine_mode', 'UNKNOWN')} ===")
+            # Return disabled state but don't fail - frontend will handle gracefully
+            pass
+        
         # Add total_strikes and log final response
         chain_data["total_strikes"] = len(chain_data.get("calls", []))
         logger.info(f"Final option chain response: {chain_data}")

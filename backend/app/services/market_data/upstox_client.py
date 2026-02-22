@@ -97,13 +97,17 @@ class UpstoxClient:
     def _set_cache(self, cache_key: str, data: Any, ttl: int = None) -> None:
         """Set cache data"""
         try:
-            # Use Redis if available
-            if self._redis_client:
-                if ttl:
-                    self._redis_client.setex(cache_key, ttl, json.dumps(data))
-                else:
-                    self._redis_client.set(cache_key, json.dumps(data))
-                logger.debug(f"Cached to Redis: {cache_key}")
+            # Use Redis if available (disabled for now to avoid connection errors)
+            if False and self._redis_client:
+                try:
+                    if ttl:
+                        self._redis_client.setex(cache_key, ttl, json.dumps(data))
+                    else:
+                        self._redis_client.set(cache_key, json.dumps(data))
+                    logger.debug(f"Cached to Redis: {cache_key}")
+                except Exception as e:
+                    logger.warning(f"Redis cache failed, using memory cache: {e}")
+                    self._memory_cache[cache_key] = data
             else:
                 # Fallback to memory cache
                 self._memory_cache[cache_key] = data

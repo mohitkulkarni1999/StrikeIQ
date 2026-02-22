@@ -305,6 +305,11 @@ class UpstoxAuthService:
         # SECURITY: Ensure timezone-aware comparison
         now = datetime.now(timezone.utc)
         
+        # If no credentials loaded, try to reload from file
+        if not self._credentials:
+            self._credentials = self._load_credentials()
+            logger.info(f"Reloaded credentials: {self._credentials is not None}")
+        
         if self._credentials and self._credentials.expires_at > now:
             return self._credentials.access_token
         elif self._credentials and self._credentials.refresh_token:

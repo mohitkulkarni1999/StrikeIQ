@@ -85,18 +85,22 @@ export default function Dashboard() {
     const effectiveSpot = useEffectiveSpot(data, mode);
     const snapshotAnalytics = useSnapshotAnalytics(mode, data?.data_source || '');
     const timeoutProtection = useTimeoutProtection(mode);
-
-    console.log("� Dashboard Mode Analysis:", {
+    
+    // Analytics enabled guard
+    const isAnalyticsEnabled = data?.analytics_enabled !== false;
+    
+    console.log("🔍 Dashboard Mode Analysis:", {
         mode,
         isLiveMode,
         isSnapshotMode,
         isHaltedMode,
         effectiveSpot,
         engineMode: status?.engine_mode,
-        dataSource: data?.data_source
+        dataSource: data?.data_source,
+        isAnalyticsEnabled
     });
 
-    console.log("�📦 Dashboard selectedExpiry:", selectedExpiry);
+    console.log("📦 Dashboard selectedExpiry:", selectedExpiry);
     console.log("📦 Dashboard data:", data);
     console.log("📦 Dashboard status:", status);
     console.log("Dashboard error:", error);
@@ -310,6 +314,35 @@ export default function Dashboard() {
         </div>
 
         {/* ROW 3 - PCR + SMART MONEY + LIQUIDITY */}
+        <div className="col-span-4 bg-card border border-border rounded-md p-3">
+          <div className="text-xs font-bold text-text-secondary mb-3">EXPECTED MOVE</div>
+          <div className="space-y-2">
+            <div className="text-2xl font-mono font-bold text-text-primary">
+              {data?.intelligence?.analytics_enabled ? 
+                (data?.intelligence?.probability?.expected_move || 0).toFixed(2) :
+                <span className="text-text-secondary">Waiting for valid market data...</span>
+              }
+            </div>
+            <div className="text-xs text-text-secondary">
+              {data?.intelligence?.analytics_enabled ? 
+                `±${(data?.intelligence?.probability?.upper_1sd || 0).toFixed(2)}` :
+                <span className="text-text-secondary">Std Dev unavailable</span>
+              }
+            </div>
+            <div className="text-xs text-text-secondary">
+              {data?.intelligence?.analytics_enabled ? 
+                `${((data?.intelligence?.probability?.breach_probability || 0) * 100).toFixed(1)}% chance of breakout` :
+                <span className="text-text-secondary">Breakout analysis unavailable</span>
+              }
+            </div>
+            {!data?.intelligence?.analytics_enabled && (
+              <div className="text-xs text-yellow-400 font-medium text-center p-2 rounded">
+                ⚠️ Analytics Disabled - Engine calculations unavailable
+              </div>
+            )}
+          </div>
+        </div>
+
         <div className="col-span-4 bg-card border border-border rounded-md p-3">
           <div className="text-xs font-bold text-text-secondary mb-3">PUT-CALL RATIO</div>
           <div className="space-y-2">

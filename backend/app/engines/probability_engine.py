@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, List, Any, Optional
 import math
+from ...exceptions.data_unavailable_error import DataUnavailableError, MissingPremiumError
 
 logger = logging.getLogger(__name__)
 
@@ -27,13 +28,13 @@ class ProbabilityEngine:
         Returns:
             Structured probability output with expected move calculations
         """
-        try:
-            # Validate inputs
-            if not spot_price or not calls or not puts:
-                logger.error(f"[PROBABILITY] Invalid inputs - spot: {spot_price}, calls: {len(calls)}, puts: {len(puts)}")
-                return None
-            
-            logger.info(f"[PROBABILITY] Starting calculation - spot: {spot_price}, calls: {len(calls)}, puts: {len(puts)}")
+        # Validation Layer - Fail-Safe Mode
+        if not spot_price or not calls or not puts:
+            logger.error(f"[PROBABILITY] Invalid inputs - spot: {spot_price}, calls: {len(calls)}, puts: {len(puts)}")
+            raise DataUnavailableError("Invalid inputs for probability calculation")
+        
+        if spot_price <= 0:
+            raise DataUnavailableError("Invalid spot price for probability calculation")
             
             # Calculate days to expiry from option chain data
             days_to_expiry = ProbabilityEngine._calculate_days_to_expiry(calls, puts)
@@ -80,8 +81,9 @@ class ProbabilityEngine:
             }
             
         except Exception as e:
-            # Engine never crashes - return None on any error
-            return None
+            # Engine never crashes - raise proper error on any error
+            logger.error(f"[PROBABILITY] Calculation failed: {e}")
+            raise DataUnavailableError(f"Probability calculation failed: {e}")
     
     @staticmethod
     def _calculate_days_to_expiry(calls: List[Dict], puts: List[Dict]) -> int:

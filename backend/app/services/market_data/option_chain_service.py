@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional
 from fastapi import HTTPException
-from .upstox_client import UpstoxClient, TokenExpiredError
+from .upstox_client import UpstoxClient, TokenExpiredError, APIResponseError
 from ..upstox_auth_service import UpstoxAuthService
 from ..cache_service import cache_service
 from ..market_session_manager import get_market_session_manager, MarketSession, EngineMode, is_live_market
@@ -220,7 +220,7 @@ class OptionChainService:
                 # Use next weekly expiry for BANKNIFTY and NIFTY when market is not open
                 if symbol.upper() in ["BANKNIFTY", "NIFTY"]:
                     expiry_date = self.get_next_weekly_expiry(symbol)
-                    logger.info(f"🔄 Expiry rollover triggered for {symbol}: using next weekly expiry {expiry_date} (market: {market_status.value})")
+                    logger.info(f"Expiry rollover triggered for {symbol}: using next weekly expiry {expiry_date} (market: {market_status.value})")
                 else:
                     # For other symbols, use nearest valid expiry
                     if not expiry_date:
@@ -329,7 +329,7 @@ class OptionChainService:
                         current_expiry_index = valid_expiries.index(expiry_date) if expiry_date in valid_expiries else 0
                         if current_expiry_index + 1 < len(valid_expiries):
                             next_expiry = valid_expiries[current_expiry_index + 1]
-                            logger.info(f"🔄 Retrying with next expiry for {symbol}: {next_expiry}")
+                            logger.info(f"Retrying with next expiry for {symbol}: {next_expiry}")
                             
                             # Retry API call with next expiry
                             retry_response_data = await self.client.get_option_chain(token, instrument_key, next_expiry)

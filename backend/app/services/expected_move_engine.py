@@ -7,6 +7,7 @@ import logging
 from typing import Dict, Any, List, Optional, Tuple
 from dataclasses import dataclass
 import numpy as np
+from ..exceptions.data_unavailable_error import DataUnavailableError, MissingATMError, MissingPremiumError
 
 logger = logging.getLogger(__name__)
 
@@ -39,19 +40,38 @@ class ExpectedMoveEngine:
         """
         Compute expected move from option chain data
         """
+        # Validation Layer - Fail-Safe Mode
+        if not data:
+            raise DataUnavailableError("No option chain data provided")
+        
+        symbol = data.get("symbol", "NIFTY")
+        spot = data.get("spot", 0)
+        calls = data.get("calls", [])
+        puts = data.get("puts", [])
+        
+        # Validate essential data
+        if not calls or not puts:
+            raise DataUnavailableError("Empty option chain - no calls or puts data")
+        
+        if spot <= 0:
+            raise DataUnavailableError("Invalid spot price for expected move calculation")
+        
         try:
-            symbol = data.get("symbol", "NIFTY")
-            spot = data.get("spot", 0)
-            calls = data.get("calls", [])
-            puts = data.get("puts", [])
-            
             # Find ATM options
             atm_call, atm_put = self._find_atm_options(calls, puts, spot)
+            
+            # Validate ATM options
+            if not atm_call or not atm_put:
+                raise MissingATMError("ATM options not found for expected move calculation")
             
             # Calculate premiums
             atm_call_premium = atm_call.get("last_price", 0) if atm_call else 0
             atm_put_premium = atm_put.get("last_price", 0) if atm_put else 0
             combined_premium = atm_call_premium + atm_put_premium
+            
+            # Validate premiums
+            if combined_premium <= 0:
+                raise MissingPremiumError("ATM premiums unavailable for expected move calculation")
             
             # Calculate expected moves
             expected_move_1sd, expected_move_2sd = self._calculate_expected_moves(

@@ -96,10 +96,10 @@ async def start_market_session_manager(app: FastAPI):
         # Store in app state for global access
         app.state.market_session_manager = session_manager
         
-        logger.info("✅ Market session manager started")
+        logger.info("Market session manager started")
         
     except Exception as e:
-        logger.error(f"❌ Failed to start market session manager: {e}")
+        logger.error(f"Failed to start market session manager: {e}")
 
 
 async def stop_market_session_manager(app: FastAPI):
@@ -157,16 +157,16 @@ async def start_market_feed(app: FastAPI):
                     app.state.upstox_feeds = {}
                 app.state.upstox_feeds[symbol] = feed
                 
-                logger.info(f"✅ Upstox feed started for {symbol}")
+                logger.info(f"Upstox feed started for {symbol}")
                 
             except Exception as e:
-                logger.error(f"❌ Failed to start feed for {symbol}: {e}")
+                logger.error(f"Failed to start feed for {symbol}: {e}")
                 continue
         
-        logger.info("🚀 Upstox V3 WebSocket market feed initialization complete")
+        logger.info("Upstox V3 WebSocket market feed initialization complete")
         
     except Exception as e:
-        logger.error(f"❌ Failed to start market feed: {e}")
+        logger.error(f"Failed to start market feed: {e}")
 
 
 async def stop_data_scheduler(app: FastAPI):

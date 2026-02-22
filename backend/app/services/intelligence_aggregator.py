@@ -1,6 +1,7 @@
 import logging
 from typing import Dict, Any, List, Optional
 from ..engines.probability_engine import ProbabilityEngine
+from ..exceptions.data_unavailable_error import DataUnavailableError
 
 logger = logging.getLogger(__name__)
 
@@ -23,11 +24,15 @@ class IntelligenceAggregator:
             puts: Put option contracts
             
         Returns:
-            Unified MarketIntelligence object
+            Unified MarketIntelligence object with fail-safe handling
         """
         try:
             logger.info(f"[INTELLIGENCE DEBUG] Starting aggregation - analytics: {raw_analytics}")
             logger.info(f"[INTELLIGENCE DEBUG] Market data: {market_data}")
+            
+            # Validate inputs
+            if not raw_analytics or not market_data:
+                raise DataUnavailableError("Invalid inputs for intelligence aggregation")
             
             # Compute bias intelligence
             bias = IntelligenceAggregator._compute_bias(raw_analytics)
@@ -56,11 +61,36 @@ class IntelligenceAggregator:
                 "liquidity": liquidity,
                 "probability": probability,
                 "timestamp": market_data.get("timestamp", ""),
-                "confidence": confidence
+                "confidence": confidence,
+                "analytics_enabled": True
             }
             
             logger.info(f"[INTELLIGENCE DEBUG] Final intelligence object: {intelligence}")
             return intelligence
+            
+        except DataUnavailableError as e:
+            # Engine failed - return disabled state
+            logger.warning(f"[INTELLIGENCE] Engine failed, disabling analytics: {e}")
+            return {
+                "bias": {"score": 0, "label": "NEUTRAL", "confidence": 0.0},
+                "volatility": {"current": "normal", "risk": "medium"},
+                "liquidity": {"total_oi": 0},
+                "probability": {
+                    "expected_move": 0,
+                    "upper_1sd": 0,
+                    "lower_1sd": 0,
+                    "upper_2sd": 0,
+                    "lower_2sd": 0,
+                    "breach_probability": 0,
+                    "range_hold_probability": 0,
+                    "volatility_state": "unknown"
+                },
+                "timestamp": market_data.get("timestamp", ""),
+                "confidence": 0.0,
+                "analytics_enabled": False,
+                "engine_mode": "DISABLED",
+                "reason": str(e)
+            }
             
         except Exception as e:
             # Never crash - return minimal safe structure
@@ -76,11 +106,14 @@ class IntelligenceAggregator:
                     "upper_2sd": 0,
                     "lower_2sd": 0,
                     "breach_probability": 0,
-                    "range_hold_probability": 100,
+                    "range_hold_probability": 0,
                     "volatility_state": "unknown"
                 },
-                "timestamp": "",
-                "confidence": 0.0
+                "timestamp": market_data.get("timestamp", ""),
+                "confidence": 0.0,
+                "analytics_enabled": False,
+                "engine_mode": "DISABLED",
+                "reason": f"Unexpected error: {e}"
             }
     
     @staticmethod
