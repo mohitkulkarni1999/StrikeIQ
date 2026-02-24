@@ -62,10 +62,10 @@ function MyApp({ Component, pageProps }: AppProps) {
     <AuthProvider>
       <AppBootstrapGuard>
         <div className="min-h-screen bg-background text-text-primary">
-            <Navbar />
-            <Component {...pageProps} />
-          </div>
-        </AppBootstrapGuard>
+          <Navbar />
+          <Component {...pageProps} />
+        </div>
+      </AppBootstrapGuard>
     </AuthProvider>
   );
 }

@@ -1,431 +1,195 @@
 "use client";
 
 import React, { useState, useEffect, memo } from 'react';
-import { WifiOff, TrendingUp, TrendingDown, Minus, Activity, AlertTriangle, Database, RefreshCw } from 'lucide-react';
+import { Activity, Database } from 'lucide-react';
 import { useLiveMarketData } from '../hooks/useLiveMarketData';
 import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
-import MarketStatusIndicator from './MarketStatusIndicator';
 import DebugBadge from './DebugBadge';
-import ProbabilityDisplay from './ProbabilityDisplay';
-import ExpectedMoveChart from './ExpectedMoveChart';
-import InstitutionalBias from './InstitutionalBias';
-import SignalCards from './SignalCards';
 import AIInterpretationPanel from './AIInterpretationPanel';
-
-// ─── Shared Components ────────────────────────────────────────────────────────
-import MarketMetrics from './MarketMetrics';
-import BiasMeter from './BiasMeter';
 import OIHeatmap from './OIHeatmap';
-
-// ─── Structural Intelligence Panels ──────────────────────────────────────────
-import StructuralBannerFinal from './intelligence/StructuralBannerFinal';
-import GammaPressurePanelFinal from './intelligence/GammaPressurePanelFinal';
-import SmartMoneyPanel from './intelligence/SmartMoneyPanel';
-import ExpiryPanelFinal from './intelligence/ExpiryPanelFinal';
 import AlertPanelFinal from './intelligence/AlertPanelFinal';
 
-// ─── Memoized Components (Phase 4) ─────────────────────────────────────────────
-const MemoizedMarketMetrics = memo(MarketMetrics);
-const MemoizedInstitutionalBias = memo(InstitutionalBias);
-const MemoizedSmartMoney = memo(SmartMoneyPanel);
-const MemoizedGammaPressure = memo(GammaPressurePanelFinal);
+// ── Dashboard sub-components ─────────────────────────────────────────────────
+import { LoadingBlock, SnapshotReadyBlock, ErrorBlock } from './dashboard/DashboardBlocks';
+import { TickerStrip } from './dashboard/TickerStrip';
+import { StatCardsRow } from './dashboard/StatCards';
+import { BiasAndMove } from './dashboard/BiasAndMove';
+import { SmartMoneyAndLiquidity } from './dashboard/SmartMoneyAndLiquidity';
+import { CARD } from './dashboard/DashboardTypes';
+
+// ── Memoized heavy panels ─────────────────────────────────────────────────────
 const MemoizedOIHeatmap = memo(OIHeatmap);
 const MemoizedAIPanel = memo(AIInterpretationPanel);
 const MemoizedAlerts = memo(AlertPanelFinal);
-const MemoizedExpectedMove = memo(ExpectedMoveChart);
-const MemoizedBiasMeter = memo(BiasMeter);
-const MemoizedProbability = memo(ProbabilityDisplay);
 
-// ─── Helper Components ─────────────────────────────────────────────────────────
+// ── Types ─────────────────────────────────────────────────────────────────────
+interface DashboardProps { initialSymbol?: string; }
 
-function LoadingBlock() {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[60vh] text-slate-300">
-      <RefreshCw className="w-10 h-10 text-[#4F8CFF] animate-spin mb-4" />
-      <p className="text-lg font-mono animate-pulse text-[#4F8CFF]/80 tracking-widest uppercase">Synchronizing Truth Agreement...</p>
-    </div>
-  );
-}
-
-function SnapshotReadyBlock() {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[40vh] text-blue-300 bg-blue-950/20 rounded-2xl border border-blue-900/50 p-8 m-4">
-      <Database className="w-12 h-12 text-blue-400 mb-4" />
-      <h3 className="text-xl font-bold text-blue-400">Snapshot Mode Active</h3>
-      <p className="mt-2 text-blue-300/70 text-center max-w-md">Using REST snapshot data - Market is currently closed</p>
-    </div>
-  );
-}
-
-function ErrorBlock({ message }: { message: string }) {
-  return (
-    <div className="flex flex-col items-center justify-center min-h-[40vh] text-slate-300 bg-red-950/20 rounded-2xl border border-red-900/50 p-8 m-4">
-      <WifiOff className="w-12 h-12 text-red-500 mb-4" />
-      <h3 className="text-xl font-bold text-red-400">Connection Interrupted</h3>
-      <p className="mt-2 text-red-300/70 text-center max-w-md">{message}</p>
-    </div>
-  );
-}
-
-// ─── Main Dashboard ────────────────────────────────────────────────────────────
-
-interface DashboardProps {
-  initialSymbol?: string;
-}
-
-export default function Dashboard({ initialSymbol = "NIFTY" }: DashboardProps) {
-  console.log("🚀 ENHANCED DASHBOARD COMPONENT ACTIVE for", initialSymbol);
-  const [symbol, setSymbol] = useState(initialSymbol);
+export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
+  const [symbol] = useState(initialSymbol);
   const [expiryList, setExpiryList] = useState<string[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
 
-  // Use enhanced hook with market session support
   const { data, status, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
 
-  // Mode guards and analytics
   const isLiveMode = useModeGuard(mode, 'LIVE');
   const isSnapshotMode = useModeGuard(mode, 'SNAPSHOT');
-  const isHaltedMode = useModeGuard(mode, 'HALTED');
   const effectiveSpot = useEffectiveSpot(data, mode);
-  const snapshotAnalytics = useSnapshotAnalytics(mode, data?.data_source || '');
-  const timeoutProtection = useTimeoutProtection(mode);
+  const isAnalyticsEnabled = (data as any)?.analytics_enabled !== false;
 
-  // Analytics enabled guard
-  const isAnalyticsEnabled = data?.analytics_enabled !== false;
-
-  console.log("🔍 Dashboard Mode Analysis:", {
-    mode,
-    isLiveMode,
-    isSnapshotMode,
-    isHaltedMode,
-    effectiveSpot,
-    engineMode: status?.engine_mode,
-    dataSource: data?.data_source,
-    isAnalyticsEnabled
-  });
-
-  console.log("📦 Dashboard selectedExpiry:", selectedExpiry);
-  console.log("📦 Dashboard data:", data);
-  console.log("📦 Dashboard status:", status);
-  console.log("Dashboard error:", error);
-
-  const safeError = typeof error === "string" ? error : null;
-
-  // ENGINE MODE UI VALIDATION GUARD
+  // Add/remove snapshot-mode body class
   React.useEffect(() => {
-    if (mode !== "live") {
-      console.log(`🛡️ ENGINE MODE GUARD: Disabling live animations - Mode: ${mode}`);
-      // Disable live animations
+    if (mode !== 'live') {
       document.body.classList.add('snapshot-mode');
     } else {
-      console.log("✅ ENGINE MODE GUARD: Enabling live animations");
       document.body.classList.remove('snapshot-mode');
     }
   }, [mode]);
 
-  // Use expiries from WebSocket data
+  // Populate expiry list from data
   useEffect(() => {
     if (data?.available_expiries && data.available_expiries.length > 0) {
       setExpiryList(data.available_expiries);
-      if (!selectedExpiry) {
-        setSelectedExpiry(data.available_expiries[0]);
-        console.log("✅ Auto-selected expiry from WebSocket:", data.available_expiries[0]);
-      }
+      if (!selectedExpiry) setSelectedExpiry(data.available_expiries[0]);
     }
   }, [data?.available_expiries, selectedExpiry]);
 
-  // LOADING STATE FIX with snapshot mode support
-  if (loading) {
-    if (mode === 'snapshot') {
-      return <SnapshotReadyBlock />;
-    }
-    return <LoadingBlock />;
-  }
+  const safeError = typeof error === 'string' ? error : null;
+  const modeLabel = mode === 'live' ? 'LIVE' : mode === 'snapshot' ? 'SNAPSHOT' : mode === 'error' ? 'HALTED' : 'OFFLINE';
+  const modeColor = mode === 'live' ? '#4ade80' : mode === 'snapshot' ? '#60a5fa' : '#f87171';
 
-  if (safeError) {
-    return <ErrorBlock message={safeError} />;
-  }
+  // ── State guards ──────────────────────────────────────────────────────────
+  if (loading) return mode === 'snapshot' ? <SnapshotReadyBlock /> : <LoadingBlock />;
+  if (safeError) return <ErrorBlock message={safeError} />;
+  if (mode === 'snapshot' && !data) return <SnapshotReadyBlock />;
 
-  // TIMEOUT PROTECTION - Don't render live components in snapshot mode
-  if (mode === 'snapshot' && !data) {
-    return <SnapshotReadyBlock />;
-  }
-
+  // ── Main render ───────────────────────────────────────────────────────────
   return (
-    <div className="bg-background text-text-primary min-h-screen">
-      {/* MAIN CONTENT WRAPPER */}
-      <div className="grid grid-cols-12 gap-3 p-3">
+    <div
+      className="min-h-screen text-white"
+      style={{ background: 'radial-gradient(ellipse 100% 50% at 50% 0%, #0d1117 0%, #080b10 60%)' }}
+    >
+      {/* Subtle grid overlay */}
+      <div
+        className="pointer-events-none fixed inset-0 z-0"
+        style={{
+          backgroundImage: 'linear-gradient(rgba(0,229,255,1) 1px, transparent 1px), linear-gradient(90deg, rgba(0,229,255,1) 1px, transparent 1px)',
+          backgroundSize: '48px 48px',
+          opacity: 0.018,
+        }}
+      />
 
-        {/* ROW 1 - TOP SPOT STRIP */}
-        <div className="col-span-12 bg-card border border-border rounded-md p-3">
-          <div className="grid grid-cols-12 gap-3 items-center">
-            {/* Symbol Name */}
-            <div className="col-span-3">
-              <div className="text-sm font-mono font-bold text-text-primary">
-                {symbol}
-              </div>
+      <div className="relative z-10 max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6 space-y-4">
+
+        {/* ROW 1 — Ticker strip */}
+        <TickerStrip
+          symbol={symbol}
+          data={data}
+          effectiveSpot={effectiveSpot}
+          mode={mode}
+          status={status}
+          modeLabel={modeLabel}
+          modeColor={modeColor}
+        />
+
+        {/* ROW 2 — Four stat cards */}
+        <StatCardsRow data={data} isAnalyticsEnabled={isAnalyticsEnabled} />
+
+        {/* ROW 3 — Market Bias + Expected Move */}
+        <BiasAndMove data={data} isSnapshotMode={isSnapshotMode} />
+
+        {/* ROW 4 — Smart Money + Liquidity */}
+        <SmartMoneyAndLiquidity
+          data={data}
+          isLiveMode={isLiveMode}
+          isSnapshotMode={isSnapshotMode}
+          mode={mode}
+        />
+
+        {/* ── Snapshot banner ─────────────────────────────────────────────── */}
+        {isSnapshotMode && (
+          <div
+            className="rounded-2xl px-5 py-4 flex items-center gap-4"
+            style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.18)' }}
+          >
+            <div
+              className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
+              style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.22)' }}
+            >
+              <Database className="w-4 h-4 text-blue-400" />
             </div>
-
-            {/* Spot Price */}
-            <div className="col-span-3">
-              <div className="text-lg font-mono font-bold text-text-primary">
-                {effectiveSpot?.toFixed(2) || '0.00'}
-                {mode === 'snapshot' && (
-                  <span className="text-xs text-blue-400 ml-2">(REST)</span>
-                )}
-              </div>
-            </div>
-
-            {/* Price Change */}
-            <div className="col-span-2">
-              <div className={`text-sm font-mono font-bold ${data?.change >= 0 ? 'text-bullish' : 'text-bearish'}`}>
-                {data?.change >= 0 ? '+' : ''}{data?.change_percent?.toFixed(2)}%
-              </div>
-            </div>
-
-            {/* Market Status */}
-            <div className="col-span-2">
-              <div className={`text-xs font-mono px-2 py-1 rounded border ${status?.market_status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
-                status?.market_status === 'PRE_OPEN' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' :
-                  status?.market_status === 'CLOSED' ? 'bg-red-500/20 text-red-400 border-red-500/40' :
-                    status?.market_status === 'HALTED' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
-                      'bg-gray-500/20 text-gray-400 border-gray-500/40'
-                }`}>
-                {status?.market_status || 'UNKNOWN'}
-              </div>
-            </div>
-
-            {/* Engine Mode Indicator */}
-            <div className="col-span-2">
-              <div className={`text-xs font-mono px-2 py-1 rounded border ${mode === 'live' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
-                mode === 'snapshot' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40' :
-                  mode === 'halted' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
-                    'bg-gray-500/20 text-gray-400 border-gray-500/40'
-                }`}>
-                {mode === 'live' ? 'LIVE' :
-                  mode === 'snapshot' ? 'SNAPSHOT' :
-                    mode === 'halted' ? 'HALTED' : 'OFFLINE'}
+            <div>
+              <div className="text-xs font-mono font-bold text-blue-400 tracking-wide">SNAPSHOT MODE — Market Closed</div>
+              <div className="text-[10px] font-mono mt-0.5" style={{ color: 'rgba(96,165,250,0.55)' }}>
+                Displaying last available EOD snapshot. Live data resumes at market open.
               </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* ROW 2 - MARKET BIAS + EXPECTED MOVE */}
-        <div className="col-span-4 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">MARKET BIAS</div>
-          <div className="space-y-2">
-            {/* Signal Tag */}
-            <div className="flex items-center gap-2">
-              <div className={`text-xs font-bold px-2 py-1 rounded ${data?.intelligence?.bias?.label === 'BULLISH' ? 'bg-green-500/20 text-green-400' :
-                data?.intelligence?.bias?.label === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
-                  'bg-neutral-500/20 text-neutral-400'
-                }`}>
-                {data?.intelligence?.bias?.label || 'HOLD'}
-              </div>
-              <div className="text-xs text-text-secondary">
-                Strength: {data?.intelligence?.bias?.score?.toFixed(1) || '0.0'}
-              </div>
-            </div>
-
-            {/* Confidence Bar */}
-            <div className="w-full bg-border rounded-full h-2">
-              <div
-                className="h-full bg-analytics-500 rounded-full transition-all"
-                style={{ width: `${Math.abs(data?.intelligence?.bias?.score || 0) * 10}%` }}
-              />
-            </div>
-
-            {/* Additional Info */}
-            <div className="text-xs text-text-secondary">
-              <div>Confidence: {Math.abs(data?.intelligence?.bias?.score || 0) > 0.7 ? 'HIGH' : Math.abs(data?.intelligence?.bias?.score || 0) > 0.4 ? 'MEDIUM' : 'LOW'}</div>
-              <div>Pressure: {data?.intelligence?.bias?.label === 'BULLISH' ? 'BUYING' : data?.intelligence?.bias?.label === 'BEARISH' ? 'SELLING' : 'BALANCED'}</div>
-            </div>
-          </div>
-        </div>
-
-        <div className="col-span-8 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">
-            EXPECTED MOVE
-            {isSnapshotMode && (
-              <span className="text-xs text-blue-400 ml-2">(REST Premiums)</span>
-            )}
-          </div>
-          <div className="space-y-3">
-            {/* Range Bar */}
-            <div className="flex items-center gap-3">
-              <div className="text-sm font-mono text-bearish">
-                {(data?.spot - (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}
-              </div>
-              <div className="flex-1 bg-border rounded-full h-3 relative">
-                <div className="absolute inset-y-0 left-1/2 w-0.5 bg-text-primary"></div>
-                <div className="absolute inset-y-0 left-0 right-0 flex items-center px-1">
-                  <div className="w-full bg-analytics-500/20 rounded-full h-1"></div>
-                </div>
-              </div>
-              <div className="text-sm font-mono text-bullish">
-                {(data?.spot + (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}
-              </div>
-            </div>
-
-            {/* Bounds */}
-            <div className="flex justify-between text-xs text-text-secondary">
-              <div>Lower: {(data?.spot - (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}</div>
-              <div>Spot: {data?.spot?.toFixed(2)}</div>
-              <div>Upper: {(data?.spot + (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}</div>
-            </div>
-
-            {/* Risk Badge */}
-            <div className="text-xs font-mono px-2 py-1 bg-orange-500/20 text-orange-400 border border-orange-500/40 rounded">
-              BREAKOUT RISK: {data?.intelligence?.probability?.breach_probability?.toFixed(0) || '0'}%
-            </div>
-          </div>
-        </div>
-
-        {/* ROW 3 - PCR + SMART MONEY + LIQUIDITY */}
-        <div className="col-span-4 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">EXPECTED MOVE</div>
-          <div className="space-y-2">
-            <div className="text-2xl font-mono font-bold text-text-primary">
-              {data?.intelligence?.analytics_enabled ?
-                (data?.intelligence?.probability?.expected_move || 0).toFixed(2) :
-                <span className="text-text-secondary">Waiting for valid market data...</span>
-              }
-            </div>
-            <div className="text-xs text-text-secondary">
-              {data?.intelligence?.analytics_enabled ?
-                `±${(data?.intelligence?.probability?.upper_1sd || 0).toFixed(2)}` :
-                <span className="text-text-secondary">Std Dev unavailable</span>
-              }
-            </div>
-            <div className="text-xs text-text-secondary">
-              {data?.intelligence?.analytics_enabled ?
-                `${((data?.intelligence?.probability?.breach_probability || 0) * 100).toFixed(1)}% chance of breakout` :
-                <span className="text-text-secondary">Breakout analysis unavailable</span>
-              }
-            </div>
-            {!data?.intelligence?.analytics_enabled && (
-              <div className="text-xs text-yellow-400 font-medium text-center p-2 rounded">
-                ⚠️ Analytics Disabled - Engine calculations unavailable
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="col-span-4 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">PUT-CALL RATIO</div>
-          <div className="space-y-2">
-            <div className="text-2xl font-mono font-bold text-text-primary">
-              {data?.analytics?.pcr?.toFixed(2) || '0.00'}
-            </div>
-            <div className={`text-sm font-bold ${data?.analytics?.pcr > 1 ? 'text-bullish' : data?.analytics?.pcr < 1 ? 'text-bearish' : 'text-neutral'}`}>
-              {data?.analytics?.pcr > 1 ? 'BULLISH BIAS' : data?.analytics?.pcr < 1 ? 'BEARISH BIAS' : 'NEUTRAL'}
-            </div>
-            <div className="text-xs text-text-secondary">
-              Total CE OI: {(data?.analytics?.total_call_oi || 0).toLocaleString()}
-            </div>
-            <div className="text-xs text-text-secondary">
-              Total PE OI: {(data?.analytics?.total_put_oi || 0).toLocaleString()}
-            </div>
-          </div>
-        </div>
-
-        <div className="col-span-4 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">
-            SMART MONEY
-            {isSnapshotMode && (
-              <span className="text-xs text-blue-400 ml-2">(DISABLED)</span>
-            )}
-          </div>
-          <div className="space-y-2">
-            {isLiveMode ? (
-              <MemoizedSmartMoney smartMoneyData={data?.smart_money_activity ?? null} />
-            ) : (
-              <div className="text-xs text-text-secondary text-center py-4">
-                Smart Money analysis disabled in {mode.toUpperCase()} mode
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="col-span-4 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">LIQUIDITY</div>
-          <div className="space-y-2">
-            <div className="flex justify-between">
-              <span className="text-sm text-text-secondary">Total OI</span>
-              <span className="text-sm font-mono text-text-primary">
-                {((data?.analytics?.total_call_oi || 0) + (data?.analytics?.total_put_oi || 0)).toLocaleString()}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-text-secondary">OI Change</span>
-              <span className="text-sm font-mono text-text-primary">
-                {data?.analytics?.oi_change_24h?.toFixed(0) || '0'}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-text-secondary">Volume</span>
-              <span className="text-sm font-mono text-text-primary">
-                {(data?.analytics?.total_volume || 0).toLocaleString()}
-              </span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-text-secondary">VWAP</span>
-              <span className="text-sm font-mono text-text-primary">
-                {data?.analytics?.vwap?.toFixed(2) || '0.00'}
-              </span>
-            </div>
-          </div>
-        </div>
-
-        {/* ROW 4 - OPTION CHAIN (ALWAYS AT BOTTOM) */}
-        <div className="col-span-12 bg-card border border-border rounded-md p-3">
-          <div className="text-xs font-bold text-text-secondary mb-3">OPTION CHAIN</div>
-          {data?.optionChain && (
-            <div className="text-xs text-text-secondary">
-              Option Chain Data Available: {data.optionChain.calls?.length || 0} calls, {data.optionChain.puts?.length || 0} puts
-            </div>
-          )}
-        </div>
-
-        {/* ADDITIONAL COMPONENTS */}
-        <DebugBadge className="col-span-12 mb-3" />
-        <MemoizedAIPanel intelligence={data?.intelligence ?? null} />
-        <MemoizedAlerts alerts={data?.alerts || []} />
-
-        {/* EXPIRY SELECTOR */}
+        {/* ── Expiry selector ─────────────────────────────────────────────── */}
         {expiryList.length > 0 && (
-          <div className="col-span-12 bg-card border border-border rounded-md p-3">
-            <label className="text-sm text-text-secondary block mb-2">
-              Select Expiry
+          <div className="rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3" style={CARD}>
+            <label
+              className="text-[10px] font-mono font-bold tracking-widest uppercase whitespace-nowrap shrink-0"
+              style={{ color: 'rgba(148,163,184,0.55)' }}
+            >
+              Expiry Date
             </label>
             <select
-              value={selectedExpiry || ""}
+              value={selectedExpiry || ''}
               onChange={(e) => setSelectedExpiry(e.target.value)}
-              className="bg-background border border-border text-text-primary px-3 py-2 rounded-md w-full"
+              className="flex-1 text-white text-sm font-mono px-3 py-2 rounded-xl outline-none transition-all cursor-pointer"
+              style={{ background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(0,229,255,0.15)', color: '#e2e8f0' }}
             >
               {expiryList.map((exp) => (
-                <option key={exp} value={exp}>
-                  {exp}
-                </option>
+                <option key={exp} value={exp}>{exp}</option>
               ))}
             </select>
           </div>
         )}
 
-        {/* OI HEATMAP */}
-        <div className="col-span-12 bg-card border border-border rounded-md p-3">
-          <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
+        {/* ── Option Chain panel ─────────────────────────────────────────── */}
+        <div id="section-chain" className="rounded-2xl overflow-hidden scroll-mt-20" style={CARD}>
+          <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent)' }} />
+          <div className="p-4 sm:p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="text-[10px] font-bold tracking-[0.20em] uppercase mb-1" style={{ color: 'rgba(148,163,184,0.55)', fontFamily: "'JetBrains Mono', monospace" }}>
+                Option Chain
+              </div>
+              {data?.optionChain && (
+                <span className="text-[10px] font-mono" style={{ color: 'rgba(148,163,184,0.45)' }}>
+                  {data.optionChain.calls?.length ?? 0}CE · {data.optionChain.puts?.length ?? 0}PE
+                </span>
+              )}
+            </div>
+            {data?.optionChain ? (
+              <div className="text-xs font-mono" style={{ color: 'rgba(148,163,184,0.6)' }}>
+                Option Chain Data Available — {data.optionChain.calls?.length ?? 0} calls, {data.optionChain.puts?.length ?? 0} puts
+              </div>
+            ) : (
+              <div className="flex items-center justify-center py-6" style={{ color: 'rgba(148,163,184,0.3)' }}>
+                <Activity className="w-5 h-5 mr-2" />
+                <span className="text-xs font-mono">Awaiting data…</span>
+              </div>
+            )}
+          </div>
         </div>
 
-        {/* SNAPSHOT MODE LABEL */}
-        {isSnapshotMode && (
-          <div className="col-span-12 bg-blue-500/10 border border-blue-500/30 rounded-md p-3 mb-3">
-            <div className="flex items-center gap-2 text-blue-400">
-              <Database className="w-4 h-4" />
-              <span className="text-sm font-mono font-bold">Snapshot Mode (Market Closed)</span>
-            </div>
+        {/* ── OI Heatmap ─────────────────────────────────────────────────── */}
+        <div className="rounded-2xl overflow-hidden" style={CARD}>
+          <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.40), transparent)' }} />
+          <div className="p-4 sm:p-5">
+            <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
           </div>
-        )}
+        </div>
+
+        {/* ── AI Panel + Alerts ──────────────────────────────────────────── */}
+        <div id="section-alerts" className="scroll-mt-20" />
+        <DebugBadge className="mb-1" />
+        <MemoizedAIPanel intelligence={data?.intelligence ?? null} />
+        <MemoizedAlerts alerts={data?.alerts || []} />
+
       </div>
     </div>
   );

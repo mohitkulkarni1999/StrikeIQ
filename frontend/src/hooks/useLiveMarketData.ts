@@ -1,5 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useLiveOptionsWS } from '@/core/ws/useLiveOptionsWS';
+import { useWSStore } from '@/core/ws/wsStore';
+import { clearWSInitialized } from '@/core/ws/wsInitController';
 
 export interface LiveMarketData {
     symbol: string;
@@ -9,7 +11,6 @@ export interface LiveMarketData {
     analytics: any;
     intelligence: any;
     timestamp: string;
-    // Additional engine-specific fields
     structural_regime?: string;
     regime_confidence?: number;
     regime_stability?: number;
@@ -24,14 +25,12 @@ export interface LiveMarketData {
     gamma_pressure_map?: any;
     alerts?: any[];
     available_expiries?: string[];
-    // FIX 6: market_bias declared — used for VWAP in MarketMetrics
     market_bias?: {
         vwap?: number;
         current_price?: number;
         pcr?: number;
         bias_strength?: number;
     };
-    // Normalized option chain data
     optionChain?: {
         symbol: string;
         spot: number;
@@ -60,106 +59,124 @@ interface UseLiveMarketDataReturn {
     lastUpdate: string;
 }
 
-/**
- * WebSocket-only Market Data Hook
- * - Uses locked core WebSocket module for real-time data
- * - No REST polling - relies entirely on WebSocket
- * - Provides real-time streaming data
- */
+// ── Shared event name — Navbar fires this, useLiveMarketData listens ──────────
+export const WS_BACKEND_ONLINE_EVENT = 'strikeiq:backend-online';
+
 export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
-    console.log("🔌 useLiveMarketData INIT", { symbol, expiry });
 
     const [data, setData] = useState<LiveMarketData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'error'>('loading');
 
-    // Use locked WebSocket core module
-    const { isConnected, ws } = useLiveOptionsWS({
+    // Always-current reference to reconnect — updated every render via useEffect below
+    const reconnectRef = useRef<(() => void) | null>(null);
+
+    const { reconnect } = useLiveOptionsWS({
         symbol,
         expiry: expiry || '',
+
         onMessage: (message) => {
             if (message.status === 'connected') {
-                console.log("✅ Initial connection message received");
-                setData(prev => ({
-                    ...prev,
-                    ...message,
-                    available_expiries: message.available_expiries || []
-                }));
-                setMode('live');
+                setData(prev => ({ ...prev, ...message, available_expiries: message.available_expiries || [] }));
+                setMode(prev => prev === 'loading' ? 'snapshot' : prev);
                 setLoading(false);
-            } else if (message.status === 'live_update') {
-                console.log("🔄 Live update received");
+                setError(null);
 
-                // Transform backend payload to frontend expected shape
-                const transformedData: LiveMarketData = {
+            } else if (message.status === 'live_update') {
+                const transformed: LiveMarketData = {
                     ...message,
-                    // Map intelligence directly
                     intelligence: message.intelligence || {},
-                    // Map pin_probability directly  
                     pin_probability: message.pin_probability,
-                    // Map optionChain from option_chain_snapshot
                     optionChain: message.option_chain_snapshot ? {
                         symbol: message.option_chain_snapshot.symbol,
                         spot: message.option_chain_snapshot.spot,
                         expiry: message.option_chain_snapshot.expiry,
                         calls: message.option_chain_snapshot.calls || [],
-                        puts: message.option_chain_snapshot.puts || []
+                        puts: message.option_chain_snapshot.puts || [],
                     } : null,
-                    // Extract confidence from intelligence
-                    confidence: message.intelligence?.bias?.confidence || message.intelligence?.confidence,
-                    // Map expiries for frontend
+                    confidence: message.intelligence?.bias?.confidence,
                     expiries: message.available_expiries || [],
-                    // Ensure required fields
-                    symbol: symbol,
+                    symbol,
                     spot: message.spot || 0,
-                    timestamp: message.timestamp || new Date().toISOString()
+                    timestamp: message.timestamp || new Date().toISOString(),
                 };
-
-                setData(prev => ({
-                    ...prev,
-                    ...transformedData
-                }));
-                setMode('live');
+                setData(prev => ({ ...prev, ...transformed }));
+                setMode(message.spot && message.spot > 0 ? 'live' : 'snapshot');
                 setLoading(false);
+                setError(null);
+
             } else if (message.status === 'auth_required') {
-                setError('Authentication required');
-                setMode('error');
+                setError('Authentication required'); setMode('error');
             } else if (message.status === 'auth_error') {
-                setError('Authentication service unavailable');
-                setMode('error');
+                setError('Authentication service unavailable'); setMode('error');
             }
         },
-        onError: (error) => {
-            console.error('❌ WebSocket error from core module:', error);
-            setError(error);
+
+        onError: (err) => {
+            console.warn('⚠️ WS error:', err);
+            setError(err);
             setMode('error');
-        }
+        },
+
+        onDisconnect: () => {
+            setMode(prev => prev === 'live' ? 'loading' : prev);
+        },
     });
 
-    // Update connection status
+    // Keep reconnectRef always pointing to the latest reconnect
+    useEffect(() => {
+        reconnectRef.current = reconnect;
+    }, [reconnect]);
+
+    // ── Listen for the backend-online event fired by Navbar ──────────────────
+    // This is the only reconnect trigger — no stale closures because we always
+    // read reconnectRef.current which is updated every render.
+    useEffect(() => {
+        const handleBackendOnline = () => {
+            console.log('🔄 [useLiveMarketData] backend-online event received → reconnecting');
+
+            // Full reset of wsStore guards so connect() isn't blocked
+            const store = useWSStore.getState();
+            store.setConnected(false);
+            store.setInitializing(false);
+            store.setError(null);
+            store.resetReconnectAttempts();
+            store.setWS(null);
+
+            // Clear the init flag so /api/ws/init is called again
+            clearWSInitialized();
+
+            // Reset UI
+            setMode('loading');
+            setLoading(true);
+            setError(null);
+
+            // Call reconnect via ref — always fresh, never stale
+            reconnectRef.current?.();
+        };
+
+        window.addEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline);
+        return () => window.removeEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline);
+    }, []); // empty deps — safe because we use reconnectRef.current
+
+    // ── Sync isConnected from wsStore ─────────────────────────────────────────
+    const isConnected = useWSStore(state => state.isConnected);
+
     useEffect(() => {
         if (isConnected) {
-            console.log('✅ WebSocket connected, setting mode to live');
-            setMode('live');
             setLoading(false);
             setError(null);
         } else {
-            console.log('❌ WebSocket disconnected');
-            setMode('loading');
-            setLoading(true);
+            setMode(prev => prev === 'live' ? 'loading' : prev);
         }
     }, [isConnected]);
 
     return {
-        data,
-        loading,
-        error,
-        mode,
-        isConnected,
+        data, loading, error, mode, isConnected,
         symbol,
         availableExpiries: data?.available_expiries || [],
         lastUpdate: new Date().toISOString(),
-        status: null
+        status: null,
     };
 }

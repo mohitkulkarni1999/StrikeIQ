@@ -103,7 +103,7 @@ interface UseLiveMarketDataReturn {
  */
 export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
     console.log("🔥 useLiveMarketData INIT", { symbol, expiry });
-    
+
     const [data, setData] = useState<LiveMarketData | null>(null);
     const [marketStatus, setMarketStatus] = useState<MarketStatus | null>(null);
     const [loading, setLoading] = useState<boolean>(true);
@@ -131,9 +131,11 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
     const connectWebSocket = useCallback((symbol: string, expiry: string | null) => {
         if (!symbol) return;
 
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname;
         const url = expiry
-            ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
-            : `ws://localhost:8000/ws/live-options/${symbol}`;
+            ? `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
+            : `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}`;
 
         console.log("CONNECTING TO:", url);
 
@@ -142,7 +144,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         ws.onopen = () => {
             if (!mountedRef.current) return;
-            
+
             reconnectRef.current = 0;
             setError(null);
             setLoading(false);
@@ -152,11 +154,11 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         ws.onmessage = (event) => {
             if (!mountedRef.current) return;
-            
+
             try {
                 console.log("📡 RAW WS MESSAGE:", event.data);
                 const messageData = JSON.parse(event.data);
-                
+
                 // Handle different message types
                 if (messageData.status === 'connected') {
                     console.log("📦 Initial connection message received");
@@ -167,7 +169,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                     }));
                 } else if (messageData.status === 'live_update') {
                     console.log("📦 Live update received");
-                    
+
                     // Transform backend payload to frontend expected shape
                     const transformedData = {
                         ...messageData,
@@ -188,7 +190,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                         // Map expiries for frontend
                         expiries: messageData.available_expiries || []
                     };
-                    
+
                     setData(prev => ({
                         ...prev,
                         ...transformedData
@@ -207,9 +209,9 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         ws.onclose = (event) => {
             if (!mountedRef.current) return;
-            
+
             console.log(`🔌 WebSocket closed: ${event.code} ${event.reason}`);
-            
+
             // Don't reconnect for manual closes or auth errors
             if (event.code === 1000 || mode === 'error') {
                 console.log('🔌 Manual close or error, not reconnecting');
@@ -231,10 +233,10 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         ws.onerror = (error) => {
             if (!mountedRef.current) return;
-            
+
             console.error('❌ WebSocket Error:', error);
             setError('Connection error');
-            
+
             // ✅ FIXED: Safe type narrowing for WebSocket readyState check
             // Use type guard to safely check if event.target is a WebSocket
             if (isWebSocket(error.target)) {
@@ -244,7 +246,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                     window.dispatchEvent(new CustomEvent('auth-expired'));
                 }
             }
-            
+
             // Close to trigger reconnect logic
             if (wsRef.current) {
                 wsRef.current.close();
