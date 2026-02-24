@@ -1,0 +1,7 @@
+# WebSocket Core Module Ownership
+# These files are locked and require architectural review
+
+/src/core/ws/* @Uday
+
+# Global CODEOWNERS (fallback)
+* @Uday

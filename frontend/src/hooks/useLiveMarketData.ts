@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useWebSocket } from '../contexts/WebSocketContext';
+import { useLiveOptionsWS } from '@/core/ws/useLiveOptionsWS';
 
 export interface LiveMarketData {
     symbol: string;
@@ -62,7 +62,7 @@ interface UseLiveMarketDataReturn {
 
 /**
  * WebSocket-only Market Data Hook
- * - Uses global WebSocket context for real-time data
+ * - Uses locked core WebSocket module for real-time data
  * - No REST polling - relies entirely on WebSocket
  * - Provides real-time streaming data
  */
@@ -74,52 +74,46 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
     const [error, setError] = useState<string | null>(null);
     const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'error'>('loading');
 
-    // Use global WebSocket context
-    const { isConnected, lastMessage, connect, error: wsError } = useWebSocket();
-
-    // Handle WebSocket messages
-    useEffect(() => {
-        if (!lastMessage) return;
-
-        console.log("📨 Processing WebSocket message:", lastMessage);
-
-        try {
-            // Handle different message types
-            if (lastMessage.status === 'connected') {
+    // Use locked WebSocket core module
+    const { isConnected, ws } = useLiveOptionsWS({
+        symbol,
+        expiry: expiry || '',
+        onMessage: (message) => {
+            if (message.status === 'connected') {
                 console.log("✅ Initial connection message received");
                 setData(prev => ({
                     ...prev,
-                    ...lastMessage,
-                    available_expiries: lastMessage.available_expiries || []
+                    ...message,
+                    available_expiries: message.available_expiries || []
                 }));
                 setMode('live');
                 setLoading(false);
-            } else if (lastMessage.status === 'live_update') {
+            } else if (message.status === 'live_update') {
                 console.log("🔄 Live update received");
 
                 // Transform backend payload to frontend expected shape
                 const transformedData: LiveMarketData = {
-                    ...lastMessage,
+                    ...message,
                     // Map intelligence directly
-                    intelligence: lastMessage.intelligence || {},
+                    intelligence: message.intelligence || {},
                     // Map pin_probability directly  
-                    pin_probability: lastMessage.pin_probability,
+                    pin_probability: message.pin_probability,
                     // Map optionChain from option_chain_snapshot
-                    optionChain: lastMessage.option_chain_snapshot ? {
-                        symbol: lastMessage.option_chain_snapshot.symbol,
-                        spot: lastMessage.option_chain_snapshot.spot,
-                        expiry: lastMessage.option_chain_snapshot.expiry,
-                        calls: lastMessage.option_chain_snapshot.calls || [],
-                        puts: lastMessage.option_chain_snapshot.puts || []
+                    optionChain: message.option_chain_snapshot ? {
+                        symbol: message.option_chain_snapshot.symbol,
+                        spot: message.option_chain_snapshot.spot,
+                        expiry: message.option_chain_snapshot.expiry,
+                        calls: message.option_chain_snapshot.calls || [],
+                        puts: message.option_chain_snapshot.puts || []
                     } : null,
                     // Extract confidence from intelligence
-                    confidence: lastMessage.intelligence?.bias?.confidence || lastMessage.intelligence?.confidence,
+                    confidence: message.intelligence?.bias?.confidence || message.intelligence?.confidence,
                     // Map expiries for frontend
-                    expiries: lastMessage.available_expiries || [],
+                    expiries: message.available_expiries || [],
                     // Ensure required fields
                     symbol: symbol,
-                    spot: lastMessage.spot || 0,
-                    timestamp: lastMessage.timestamp || new Date().toISOString()
+                    spot: message.spot || 0,
+                    timestamp: message.timestamp || new Date().toISOString()
                 };
 
                 setData(prev => ({
@@ -128,28 +122,20 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 }));
                 setMode('live');
                 setLoading(false);
-            } else if (lastMessage.status === 'auth_required') {
+            } else if (message.status === 'auth_required') {
                 setError('Authentication required');
                 setMode('error');
-            } else if (lastMessage.status === 'auth_error') {
+            } else if (message.status === 'auth_error') {
                 setError('Authentication service unavailable');
                 setMode('error');
             }
-        } catch (err) {
-            console.error('❌ Error parsing WebSocket message:', err);
-            setError('Failed to parse WebSocket message');
+        },
+        onError: (error) => {
+            console.error('❌ WebSocket error from core module:', error);
+            setError(error);
             setMode('error');
         }
-    }, [lastMessage, symbol]);
-
-    // Handle WebSocket errors
-    useEffect(() => {
-        if (wsError) {
-            console.error('❌ WebSocket error from context:', wsError);
-            setError(wsError);
-            setMode('error');
-        }
-    }, [wsError]);
+    });
 
     // Update connection status
     useEffect(() => {
@@ -164,14 +150,6 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             setLoading(true);
         }
     }, [isConnected]);
-
-    // Initialize connection if not connected and we have symbol/expiry
-    useEffect(() => {
-        if (symbol && expiry && !isConnected && mode === 'loading') {
-            console.log(`🚀 Initializing WebSocket connection for ${symbol} with expiry ${expiry}`);
-            connect(symbol, expiry);
-        }
-    }, [symbol, expiry, isConnected, mode, connect]);
 
     return {
         data,
