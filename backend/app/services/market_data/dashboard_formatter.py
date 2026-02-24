@@ -120,7 +120,7 @@ class DashboardFormatter:
             "change": market_data.change,
             "change_percent": market_data.change_percent,
             "timestamp": market_data.timestamp.isoformat(),
-            "market_status": market_data.market_status.value
+            "market_status": str(market_data.market_status)
         }
         
         if market_data.exchange_timestamp:

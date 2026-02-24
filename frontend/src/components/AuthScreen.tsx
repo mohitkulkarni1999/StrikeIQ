@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useRouter } from 'next/router';
 import { AuthRequiredData } from '../types/dashboard';
+import api from '../api/axios';
 
 interface AuthScreenProps {
   authData: AuthRequiredData;
@@ -16,12 +17,8 @@ function AuthScreen({ authData }: AuthScreenProps) {
     // Check authentication status on mount
     const checkAuthStatus = async () => {
       try {
-        const response = await fetch('/api/v1/auth/status');
-        if (!response.ok) {
-          setIsChecking(false);
-          return;
-        }
-        const result = await response.json();
+        const response = await api.get('/api/v1/auth/status');
+        const result = response.data;
 
         if (result.authenticated === true) {
           router.push('/');

@@ -2,32 +2,64 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
 import { useAuth } from '../../contexts/AuthContext'
+import { useWebSocket } from '../../contexts/WebSocketContext'
 import OAuthHandler from '../../components/OAuthHandler'
+import api from '../../api/axios'
 
 export default function AuthSuccess() {
   const router = useRouter()
   const { checkAuth } = useAuth()
+  const { connect } = useWebSocket()
   const [status, setStatus] = useState('loading')
 
   useEffect(() => {
     const urlParams = new URLSearchParams(window.location.search)
     const authStatus = urlParams.get('status')
+    const upstoxStatus = urlParams.get('upstox')
     
-    setStatus(authStatus || 'unknown')
+    // Check for either status=success or upstox=connected
+    const isSuccess = authStatus === 'success' || upstoxStatus === 'connected'
     
-    // If auth successful, trigger auth context refresh and redirect
-    if (authStatus === 'success') {
-      console.log('OAuth success detected, triggering auth refresh and redirect')
+    setStatus(isSuccess ? 'success' : 'unknown')
+    
+    // If auth successful, trigger WebSocket init and redirect
+    if (isSuccess) {
+      console.log('OAuth success detected, initializing WebSocket')
       
-      // Trigger auth context refresh immediately
-      checkAuth().then(() => {
-        // Redirect to dashboard after short delay
-        setTimeout(() => {
-          router.push('/')
-        }, 500)
-      })
+      // Initialize WebSocket connection
+      const initWebSocket = async () => {
+        try {
+          console.log('Calling WS init API...')
+          const response = await api.get('/api/ws/init')
+          console.log('WS init successful:', response.data)
+          
+          // Connect to WebSocket for NIFTY with current expiry
+          // Use today's date or next Thursday as expiry
+          const today = new Date()
+          const expiry = new Date(today)
+          const daysUntilThursday = (4 - today.getDay() + 7) % 7 || 7
+          expiry.setDate(today.getDate() + daysUntilThursday)
+          const expiryStr = expiry.toISOString().split('T')[0]
+          
+          console.log(`Connecting to WebSocket for NIFTY with expiry ${expiryStr}`)
+          await connect('NIFTY', expiryStr)
+          
+          // Trigger auth context refresh
+          await checkAuth()
+          
+          // Redirect to dashboard after short delay
+          setTimeout(() => {
+            router.push('/')
+          }, 500)
+        } catch (error) {
+          console.error('WS init failed:', error)
+          setStatus('error')
+        }
+      }
+      
+      initWebSocket()
     }
-  }, [router, checkAuth])
+  }, [router, checkAuth, connect])
 
   return (
     <>

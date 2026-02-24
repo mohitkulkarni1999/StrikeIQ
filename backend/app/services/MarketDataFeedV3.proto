@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package upstox.feed.v3;
+
+message FeedResponse {
+  repeated FeedData feeds = 1;
+}
+
+message FeedData {
+  string instrumentKey = 1;
+  int64 timestamp = 2;
+  double ltp = 3;
+  int64 volume = 4;
+  int64 oi = 5;
+  double bidPrice = 6;
+  int64 bidQuantity = 7;
+  double askPrice = 8;
+  int64 askQuantity = 9;
+  double open = 10;
+  double high = 11;
+  double low = 12;
+  double close = 13;
+  int64 previousCloseOI = 14;
+}
+
+message SubscriptionResponse {
+  bool success = 1;
+  string message = 2;
+  repeated string subscribedInstruments = 3;
+}

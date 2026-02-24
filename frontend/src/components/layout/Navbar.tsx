@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import { Wifi, WifiOff, Activity, ChevronDown } from 'lucide-react';
-import { useLiveMarketData } from '../../hooks/useLiveMarketDataEnhanced';
+import { useLiveMarketData } from '../../hooks/useLiveMarketData';
 import MarketStatusIndicator from '../MarketStatusIndicator';
 
 export default function Navbar() {

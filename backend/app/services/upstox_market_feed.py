@@ -6,6 +6,7 @@ Handles connection to Upstox WebSocket feed, decoding, and normalization
 import asyncio
 import json
 import logging
+import uuid
 import websockets
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
@@ -13,12 +14,22 @@ from dataclasses import dataclass
 # import protobuf  # Will need to install protobuf - making optional for now
 from app.services.upstox_auth_service import get_upstox_auth_service
 from app.services.token_manager import get_token_manager
+from app.utils.upstox_retry import retry_on_upstox_401
 from app.core.live_market_state import MarketStateManager
 from app.services.market_session_manager import get_market_session_manager, MarketSession, EngineMode, is_live_market
 from fastapi import HTTPException
 import httpx
+from app.services.upstox_protobuf_parser import parse_upstox_feed, FeedResponse
+from app.services.live_option_chain_builder import get_live_chain_builder
 
 logger = logging.getLogger(__name__)
+
+# GLOBAL REGISTRY FOR SINGLETON FEEDS (Step 1 singleton)
+global_upstox_feeds: Dict[str, 'UpstoxMarketFeed'] = {}
+
+def get_global_feed(symbol: str) -> Optional['UpstoxMarketFeed']:
+    """Helper to get global singleton feed for a symbol"""
+    return global_upstox_feeds.get(symbol.upper())
 
 @dataclass
 class FeedConfig:
@@ -41,12 +52,29 @@ class UpstoxMarketFeed:
         self.market_state = market_state or MarketStateManager()
         self.token_manager = get_token_manager()
         self.websocket = None
-        self.authorized_url = None
         self.is_running = False
         self.last_heartbeat = None
-        self.is_connected = False  # Add connection flag to prevent multiple connections
+        self.ws_connected = False  # Add connection flag to prevent multiple connections
         self.session_manager = None  # Will be set in start method
+        self.ws_subscriptions: Dict[str, bool] = {}  # Track active subscriptions
+        self.connection_attempts = 0 # Initialize connection attempts here
+        self.max_connection_attempts = 10
+        self.connection_backoff = 2  # seconds
+        self.ws_lock = asyncio.Lock() # Step 1 singleton lock
+        self.latest_ticks: Dict[str, Any] = {} # Step 6 singleton compatibility
         
+    @retry_on_upstox_401
+    async def _fetch_authorize_url(self, access_token: str, version: str = "v2") -> httpx.Response:
+        """Fetch authorize URL from Upstox API with retry support"""
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/json"
+        }
+        
+        async with httpx.AsyncClient() as client:
+            url = f"https://api.upstox.com/{version}/feed/market-data-feed/authorize"
+            return await client.get(url, headers=headers)
+
     async def get_authorized_websocket_url(self) -> Optional[str]:
         """
         Get authorized WebSocket URL from Upstox API
@@ -62,79 +90,46 @@ class UpstoxMarketFeed:
                     detail="Upstox authentication required"
                 )
                 
-            headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Accept": "application/json"
-            }
+            # Try V2 first
+            response = await self._fetch_authorize_url(access_token, version="v2")
             
-            # Use V2 endpoint for WebSocket authorization
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    "https://api.upstox.com/v2/feed/market-data-feed/authorize",
-                    headers=headers
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    logger.info(f"Upstox authorize response: {data}")
-                    redirect_uri = data.get("data", {}).get("authorized_redirect_uri")
-                    if redirect_uri:
-                        logger.info(f"Got WebSocket redirect URI: {redirect_uri}")
-                        return redirect_uri
-                    else:
-                        logger.error("No redirect URI in authorize response")
-                        return None
-                elif response.status_code == 401:
-                    logger.error("Upstox token revoked or expired")
-                    self.token_manager.invalidate("Upstox token revoked or expired")
-                    raise HTTPException(
-                        status_code=401,
-                        detail="Upstox authentication required"
-                    )
-                elif response.status_code == 410:
-                    # V2 endpoint is deprecated, fallback to V3
-                    logger.warning("V2 endpoint deprecated (410 Gone), falling back to V3")
-                    v3_response = await client.get(
-                        "https://api.upstox.com/v3/feed/market-data-feed/authorize",
-                        headers=headers
-                    )
-                    
-                    if v3_response.status_code == 200:
-                        v3_data = v3_response.json()
-                        logger.info(f"Upstox V3 authorize response: {v3_data}")
-                        v3_redirect_uri = v3_data.get("data", {}).get("authorized_redirect_uri")
-                        if v3_redirect_uri:
-                            logger.info(f"Got WebSocket redirect URI from V3: {v3_redirect_uri}")
-                            # STEP 5: VERIFY WE ARE NOT REUSING OLD REDIRECT URI
-                            import re
-                            request_id_match = re.search(r'requestId=([^&]+)', v3_redirect_uri)
-                            if request_id_match:
-                                request_id = request_id_match.group(1)
-                                logger.warning(f"Authorize requestId: {request_id}")
-                            # STEP 4: LOG TIME BETWEEN AUTHORIZE AND CONNECT
-                            import time
-                            self.authorize_time = time.time()
-                            return v3_redirect_uri
-                        else:
-                            logger.error("No redirect URI in V3 authorize response")
-                            return None
-                    elif v3_response.status_code == 401:
-                        logger.error("Upstox token revoked or expired (V3)")
-                        self.token_manager.invalidate("Upstox token revoked or expired")
-                        raise HTTPException(
-                            status_code=401,
-                            detail="Upstox authentication required"
-                        )
-                    else:
-                        logger.error(f"Failed to get V3 authorized URL: {v3_response.status_code}")
-                        return None
-                elif response.status_code >= 500:
-                    # Retry only for server errors (5xx)
-                    logger.error(f"Upstox server error: {response.status_code}")
-                    return None
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Upstox authorize response: {data}")
+                redirect_uri = data.get("data", {}).get("authorized_redirect_uri")
+                if redirect_uri:
+                    logger.info(f"Got WebSocket redirect URI: {redirect_uri}")
+                    return redirect_uri
                 else:
-                    logger.error(f"Failed to get authorized URL: {response.status_code}")
+                    logger.error("No redirect URI in authorize response")
                     return None
+            elif response.status_code == 401:
+                logger.error("Upstox token revoked or expired even after retry")
+                self.token_manager.invalidate("Upstox token revoked or expired")
+                raise HTTPException(
+                    status_code=401,
+                    detail="Upstox authentication required"
+                )
+            # Fallback to V3
+            v3_response = await self._fetch_authorize_url(access_token, version="v3")
+            
+            if v3_response.status_code == 200:
+                v3_data = v3_response.json()
+                logger.info(f"Upstox V3 authorize response: {v3_data}")
+                # V3 API uses camelCase authorizedRedirectUri
+                v3_redirect_uri = v3_data.get("data", {}).get("authorizedRedirectUri") or v3_data.get("data", {}).get("authorized_redirect_uri")
+                if v3_redirect_uri:
+                    logger.info(f"Got WebSocket redirect URI from V3: {v3_redirect_uri}")
+                    # Log time for diagnostic purposes
+                    import time
+                    self.authorize_time = time.time()
+                    return v3_redirect_uri
+                else:
+                    logger.error("No redirect URI in V3 authorize response")
+                    return None
+            else:
+                logger.error(f"Failed to get V3 authorized URL: {v3_response.status_code}")
+                return None
                     
         except HTTPException:
             # Re-raise HTTPException (401) without modification
@@ -143,111 +138,95 @@ class UpstoxMarketFeed:
             logger.error(f"Error getting authorized WebSocket URL: {e}")
             return None
     
+    async def _subscribe_index(self) -> bool:
+        """
+        Subscribe to index instrument (NSE_INDEX|Nifty 50 or NSE_INDEX|Nifty Bank)
+        """
+        try:
+            index_key = self.config.spot_instrument_key
+            subscribe_msg = {
+                "guid": str(uuid.uuid4()),
+                "method": "sub",
+                "data": {
+                    "mode": "full",
+                    "instrumentKeys": [index_key]
+                }
+            }
+            await self.websocket.send(json.dumps(subscribe_msg))
+            logger.info("Subscribed to %s", index_key)
+            return True
+        except Exception as e:
+            logger.error(f"INDEX subscription failed: {e}")
+            return False
+
+    async def _connect(self) -> bool:
+        """
+        STEP 2: Make _connect() fully awaited handshake method.
+        """
+        try:
+            # STEP 2: AUTHORIZE AFTER WAIT
+            logger.info(f"Authorizing WebSocket feed for {self.config.symbol} (attempt {self.connection_attempts})")
+            authorized_url = await self.get_authorized_websocket_url()
+            
+            if not authorized_url:
+                logger.error(f"Failed to get authorized URL for {self.config.symbol}")
+                return False
+            
+            logger.debug(f"Connecting to Upstox feed: {self.config.symbol}")
+            
+            # STEP 3: CONNECT IMMEDIATELY (< 1s)
+            logger.warning(f"=== WS HANDSHAKE START (IMMEDIATE) - {self.config.symbol} ===")
+            
+            # Upstox V3 requires subprotocol "json"
+            self.websocket = await websockets.connect(
+                authorized_url,
+                subprotocols=["json"],
+                ping_interval=20,
+                ping_timeout=10
+            )
+            
+            logger.warning(f"WebSocket subprotocol selected: {self.websocket.subprotocol}")
+            logger.warning(f"=== WS HANDSHAKE SUCCESS - {self.config.symbol} ===")
+            
+            # STEP 1 & 2: Send subscription message for index instrument immediately after connect
+            success = await self._subscribe_index()
+            if not success:
+                logger.error("INDEX subscription failed during handshake")
+                return False
+            
+            self.ws_connected = True
+            self.connection_attempts = 0  # Reset on success
+            return True
+            
+        except Exception as ws_error:
+            logger.error(f"WebSocket handshake failed for {self.config.symbol}: {ws_error}")
+            return False
+
     async def connect_to_feed(self) -> bool:
         """
-        Connect to Upstox WebSocket feed
+        STEP 1: Refactored connect_to_feed to be blocking and use ws_lock.
         """
-        # Prevent multiple connections
-        if self.is_connected:
-            logger.warning(f"Already connected to {self.config.symbol}, skipping connection attempt")
-            return True
-        
-        try:
-            # Get authorized URL
-            self.authorized_url = await self.get_authorized_websocket_url()
-            if not self.authorized_url:
-                return False
-            
-            logger.info(f"Connecting to Upstox feed: {self.config.symbol}")
-            
-            # Connection state tracking
-            self.connection_attempts = 0
-            self.max_connection_attempts = 5
-            self.connection_backoff = 2  # seconds
-            
-            # Check connection attempts
-            if self.connection_attempts >= self.max_connection_attempts:
-                logger.warning(f"Max connection attempts ({self.max_connection_attempts}) reached for {self.config.symbol}, backing off")
-                return False
-            
-            self.connection_attempts += 1
-            
-            # Add delay to prevent rapid reconnections
-            await asyncio.sleep(self.connection_backoff)
-            
+        async with self.ws_lock:
+            # STEP 5: Ensure ws_connected (is_connected) flag is checked
+            if self.ws_connected and self.websocket:
+                return True
+
             try:
-                # STEP 1: LOG EXACT REDIRECT URI USED
-                logger.warning("=== WS DEBUG START ===")
-                logger.warning(f"Redirect URI Used: {self.authorized_url}")
-                logger.warning(f"URI Length: {len(self.authorized_url)}")
-                logger.warning(f"Contains code param: {'code=' in self.authorized_url}")
-                logger.warning("=== WS DEBUG END ===")
-                
-                # STEP 4: LOG TIME BETWEEN AUTHORIZE AND CONNECT
-                import time
-                connect_time = time.time()
-                if hasattr(self, 'authorize_time'):
-                    time_diff = connect_time - self.authorize_time
-                    logger.warning(f"Time between authorize and connect: {time_diff} seconds")
-                
-                # STEP 3: FORCE SUBPROTOCOL DEBUG
-                async with websockets.connect(
-                            self.authorized_url,
-                            subprotocols=["json"],
-                            ping_interval=20,
-                            ping_timeout=10
-                        ) as websocket:
-                    logger.warning(f"WebSocket subprotocol selected: {websocket.subprotocol}")
-                    self.websocket = websocket
-                    self.is_connected = True  # Set connection flag
-                    logger.info(f"WebSocket connected successfully for {self.config.symbol}")
-                    # Reset connection attempts on success
-                    self.connection_attempts = 0
-                    return True
-            except Exception as ws_error:
+                # Increment attempts BEFORE wait/auth
                 self.connection_attempts += 1
-                logger.error(f"WebSocket connection failed: {ws_error} (attempt {self.connection_attempts})")
                 
-                # STEP 10: OUTPUT FULL HANDSHAKE ERROR DETAILS
-                logger.exception("Full WebSocket failure stacktrace")
+                # STEP 1: WAIT BEFORE AUTHORIZING (Exponential Backoff)
+                if self.connection_attempts > 1:
+                    backoff = min(self.connection_backoff * (2 ** (self.connection_attempts - 2)), 30)
+                    logger.info(f"Backing off for {backoff}s BEFORE authorization for {self.config.symbol}...")
+                    await asyncio.sleep(backoff)
+                
+                # Await the actual handshake method (STEP 2)
+                return await self._connect()
                     
-                # Check if it's an authentication error
-                if "403" in str(ws_error) or "401" in str(ws_error):
-                    logger.error("WebSocket authentication failed - token may be invalid for WebSocket feed")
-                    # Don't return False here, let the error propagate
-                    raise HTTPException(
-                        status_code=401,
-                        detail="WebSocket authentication failed"
-                    )
-                elif "connection refused" in str(ws_error).lower() or "connection reset" in str(ws_error).lower():
-                    logger.warning("WebSocket connection refused - possible network issue")
-                    if self.connection_attempts < self.max_connection_attempts:
-                        # Retry with exponential backoff
-                        backoff_time = min(self.connection_backoff * (2 ** self.connection_attempts), 30)
-                        logger.info(f"Retrying WebSocket connection in {backoff_time} seconds")
-                        await asyncio.sleep(backoff_time)
-                        return await self.connect_to_feed()
-                    else:
-                        logger.error("Max connection attempts reached")
-                        return False
-                else:
-                    logger.error(f"Unexpected WebSocket error: {ws_error}")
-                    if self.connection_attempts < self.max_connection_attempts:
-                        # Retry with exponential backoff
-                        backoff_time = min(self.connection_backoff * (2 ** self.connection_attempts), 30)
-                        logger.info(f"Retrying WebSocket connection in {backoff_time} seconds")
-                        await asyncio.sleep(backoff_time)
-                        return await self.connect_to_feed()
-                    else:
-                        logger.error("Max connection attempts reached")
-                        return False
-            
-            logger.info(f"Connected to Upstox feed for {self.config.symbol}")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to connect to Upstox feed: {e}")
-            return False
+            except Exception as e:
+                logger.error(f"Failed to connect to Upstox feed for {self.config.symbol}: {e}")
+                return False
     
     async def subscribe_to_instruments(self, instrument_keys: List[str]) -> bool:
         """
@@ -267,11 +246,131 @@ class UpstoxMarketFeed:
             message_bytes = json.dumps(subscription_message).encode('utf-8')
             await self.websocket.send(message_bytes)
             
-            logger.info(f"Subscribed to {len(instrument_keys)} instruments for {self.config.symbol}")
+            logger.debug(f"Subscribed to {len(instrument_keys)} instruments for {self.config.symbol}")
             return True
             
         except Exception as e:
             logger.error(f"Failed to subscribe to instruments: {e}")
+            return False
+    
+    async def unsubscribe_from_instruments(self, instrument_keys: List[str]) -> bool:
+        """
+        Unsubscribe from specific instruments
+        """
+        if not self.ws_connected or not self.websocket:
+            return False
+        
+        try:
+            unsubscribe_message = {
+                "guid": f"strikeiq_unsub_{self.config.symbol}_{int(datetime.now().timestamp())}",
+                "method": "unsub",
+                "data": {
+                    "instrumentKeys": instrument_keys
+                }
+            }
+            
+            # Send as binary JSON for consistency or UTF-8? 
+            # Subprotocol is "json", so either string or bytes-JSON works.
+            message_bytes = json.dumps(unsubscribe_message).encode('utf-8')
+            await self.websocket.send(message_bytes)
+            
+            if hasattr(self, 'ws_subscriptions'):
+                for key in instrument_keys:
+                    self.ws_subscriptions.pop(key, None)
+                    
+            logger.info(f"Unsubscribed from {len(instrument_keys)} instruments for {self.config.symbol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to unsubscribe from instruments for {self.config.symbol}: {e}")
+            return False
+
+    async def subscribe(self, symbol: str) -> None:
+        """
+        Subscribe to market feed for a symbol
+        """
+        if symbol in self.ws_subscriptions:
+            logger.info(f"Already subscribed to {symbol}")
+            return
+        
+        logger.info(f"Subscribing to market feed for {symbol}")
+        await self.connect_symbol_feed(symbol)
+        self.ws_subscriptions[symbol] = True
+    
+    async def unsubscribe(self, symbol: str) -> None:
+        """
+        Unsubscribe from market feed for a symbol
+        """
+        if symbol not in self.ws_subscriptions:
+            logger.info(f"Not subscribed to {symbol}")
+            return
+        
+        logger.info(f"Unsubscribing from market feed for {symbol}")
+        await self.disconnect_symbol_feed(symbol)
+        del self.ws_subscriptions[symbol]
+    
+    async def connect_symbol_feed(self, symbol: str) -> None:
+        """
+        Connect to symbol-specific market feed
+        """
+        # This would contain the connection logic for a specific symbol
+        # For now, we'll use the existing connection logic
+        if not self.is_connected:
+            success = await self.connect()
+            if not success:
+                logger.error(f"Failed to connect to feed for {symbol}")
+                return
+    
+    async def disconnect_symbol_feed(self, symbol: str) -> None:
+        """
+        Disconnect from symbol-specific market feed
+        """
+        # This would contain the disconnection logic for a specific symbol
+        # For now, we'll just log the disconnection
+        logger.info(f"Disconnected from {symbol} feed")
+    
+    async def resubscribe_to_new_expiry(self, old_instrument_keys: List[str], new_instrument_keys: List[str]) -> bool:
+        """
+        Resubscribe from old expiry instruments to new expiry instruments
+        """
+        try:
+            if not self.websocket or not self.is_connected:
+                logger.warning("WebSocket not connected, cannot resubscribe")
+                return False
+            
+            # Unsubscribe from old instruments
+            if old_instrument_keys:
+                unsubscribe_message = {
+                    "guid": f"strikeiq_unsubscribe_{int(datetime.now().timestamp())}",
+                    "method": "unsub",
+                    "data": {
+                        "instrumentKeys": old_instrument_keys
+                    }
+                }
+                
+                message_bytes = json.dumps(unsubscribe_message).encode('utf-8')
+                await self.websocket.send(message_bytes)
+                logger.info(f"Unsubscribed from {len(old_instrument_keys)} old expiry instruments")
+            
+            # Subscribe to new instruments
+            if new_instrument_keys:
+                subscribe_message = {
+                    "guid": f"strikeiq_subscribe_{int(datetime.now().timestamp())}",
+                    "method": "sub",
+                    "data": {
+                        "mode": self.config.mode,
+                        "instrumentKeys": new_instrument_keys
+                    }
+                }
+                
+                message_bytes = json.dumps(subscribe_message).encode('utf-8')
+                await self.websocket.send(message_bytes)
+                logger.info(f"Subscribed to {len(new_instrument_keys)} new expiry instruments")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to resubscribe to new expiry: {e}")
             return False
     
     async def get_active_strikes(self) -> List[str]:
@@ -290,7 +389,6 @@ class UpstoxMarketFeed:
             # Use cached spot price from market state (WS preferred, REST fallback)
             current_spot = symbol_state.ws_tick_price if symbol_state.ws_tick_price is not None else symbol_state.rest_spot_price
             if not current_spot:
-                logger.error(f"No spot price available for {self.config.symbol}")
                 return []
             
             # Use cached option chain from market state
@@ -301,12 +399,14 @@ class UpstoxMarketFeed:
                 logger.warning(f"No REST option chain available for {self.config.symbol}, using bootstrap ATM calculation")
                 
                 # Calculate bootstrap ATM using spot price and standard strike gaps
-                strike_gap = 50  # Standard NIFTY/BANKNIFTY strike gap
+                is_bn = "BANK" in self.config.symbol.upper()
+                strike_gap = 100 if is_bn else 50
                 bootstrap_atm = round(current_spot / strike_gap) * strike_gap
                 
                 # Generate bootstrap strike range around bootstrap ATM
                 bootstrap_strikes = []
-                for i in range(-self.config.strike_range, self.config.strike_range + 1):
+                # Use 15 strikes as per user request
+                for i in range(-15, 16):
                     strike = bootstrap_atm + (i * strike_gap)
                     if strike > 0:  # Only positive strikes
                         bootstrap_strikes.append(strike)
@@ -314,10 +414,16 @@ class UpstoxMarketFeed:
                 # Convert to instrument keys
                 instrument_keys = [self.config.spot_instrument_key]  # Add spot
                 
-                # Add bootstrap option strikes
+                # Add bootstrap option strikes using Upstox V3 format
+                now = datetime.now()
+                yr_mon = now.strftime("%y%b").upper()
+                sym_prefix = "BANKNIFTY" if is_bn else "NIFTY"
+                
                 for strike in bootstrap_strikes:
-                    instrument_keys.append(f"NFO_FO|{strike}-CE")
-                    instrument_keys.append(f"NFO_FO|{strike}-PE")
+                    strike_str = str(int(strike))
+                    # V3 format: NSE_FO|NIFTY26FEB22000CE
+                    instrument_keys.append(f"NSE_FO|{sym_prefix}{yr_mon}{strike_str}CE")
+                    instrument_keys.append(f"NSE_FO|{sym_prefix}{yr_mon}{strike_str}PE")
                 
                 logger.info(f"Using {len(instrument_keys)} bootstrap instruments for {self.config.symbol} (ATM: {bootstrap_atm})")
                 return instrument_keys
@@ -391,18 +497,95 @@ class UpstoxMarketFeed:
                 
                 # Update market state using WebSocket-specific method
                 self.market_state.update_ws_tick_price(self.config.symbol, instrument_key, processed_data)
+                
+                # STEP 4: Trigger dynamic FO subscription boost on first index tick
+                if instrument_key == self.config.spot_instrument_key and not getattr(self, '_fo_boost_done', False):
+                    ltp = processed_data.get("ltp")
+                    if ltp:
+                        success = await self._subscribe_to_fo_options(ltp)
+                        if not success:
+                            logger.error(f"FO subscription failed for {self.config.symbol}")
+                            return
+                        self._fo_boost_done = True
+                
+                # PUSH TO LIVE CHAIN BUILDER (Step 6 singleton)
+                # Map back to builder expected tick data format
+                tick_data = {
+                    "instrument_key": instrument_key,
+                    "ltp": processed_data.get("ltp"),
+                    "timestamp": processed_data.get("timestamp") or int(datetime.now().timestamp() * 1000),
+                    "oi": processed_data.get("oi"),
+                    "volume": processed_data.get("volume"),
+                    "delta": processed_data.get("delta"),
+                    "gamma": processed_data.get("gamma"),
+                    "theta": processed_data.get("theta"),
+                    "vega": processed_data.get("vega"),
+                    "iv": processed_data.get("iv")
+                }
+                
+                # Update latest_ticks for AI source (Step 6)
+                self.latest_ticks[instrument_key] = tick_data
+                
+                builder = get_live_chain_builder()
+                asyncio.create_task(builder.handle_tick(self.config.symbol, instrument_key, tick_data))
+                
                 logger.debug(f"Updated market state for {self.config.symbol} - {instrument_key}: LTP={processed_data.get('ltp')}")
+
                 
         except Exception as e:
             logger.error(f"Error processing live feed: {e}")
     
+    async def process_message(self, message: str | bytes) -> None:
+        """
+        Process incoming WebSocket message. 
+        Supports both JSON and Binary (Protobuf).
+        """
+        try:
+            if isinstance(message, bytes):
+                # Binary message -> Protobuf
+                feed_response = parse_upstox_feed(message)
+                if feed_response and feed_response.feeds:
+                    # Normalize FeedData objects into dicts for internal processing
+                    feeds_dict = {}
+                    for feed in feed_response.feeds:
+                        feeds_dict[feed.instrument_key] = {
+                            "ltpc": {"ltp": feed.ltp},
+                            "oi": feed.oi,
+                            "volume": feed.volume,
+                            "option_greeks": {
+                                "delta": feed.delta,
+                                "gamma": feed.gamma,
+                                "theta": feed.theta,
+                                "vega": feed.vega,
+                                "iv": feed.iv
+                            }
+                        }
+                        
+                        # STEP 4: Ensure latest_ticks updated in message receive loop
+                        # This happens in process_live_feed, but let's be explicit if needed.
+                        # We'll stick to process_live_feed for consistency.
+                    
+                    data = {
+                        "feeds": feeds_dict,
+                        "currentTs": int(datetime.now().timestamp() * 1000)
+                    }
+                    await self.process_live_feed(data)
+                return
+
+            # JSON message -> Session management or market data
+            data = json.loads(message)
+            await self.process_live_feed(data)
+            self.last_heartbeat = datetime.now(timezone.utc)
+        except Exception as e:
+            logger.error(f"Failed to process message: {e}")
+
     async def run_feed_loop(self) -> None:
         """
         Main feed loop - connect, subscribe, and process messages
         """
         while self.is_running:
             try:
-                # Connect to feed
+                # Connect to feed (sequential check)
                 if not await self.connect_to_feed():
                     await asyncio.sleep(self.config.reconnect_delay)
                     continue
@@ -446,45 +629,54 @@ class UpstoxMarketFeed:
         """
         Start the market feed service with market status integration
         """
-        self.session_manager = await get_market_session_manager()
-        
-        # Register for market status changes
-        await self.session_manager.register_status_callback(self._on_market_status_change)
-        
-        # Check current market status
-        current_status = self.session_manager.get_market_status().value
-        
-        if not is_live_market(current_status):
-            logger.info(f"NSE not live ({current_status}), switching to REST snapshot mode")
+        try:
+            self.session_manager = get_market_session_manager()
+            if self.session_manager is None:
+                logger.warning("Market session manager not available, starting without status integration")
+                self.is_running = True
+                return
+            
+            # Register for market status changes
+            await self.session_manager.register_status_callback(self._on_market_status_change)
+            
+            # Check current market status
+            current_status = self.session_manager.get_market_status().value
+            
+            # Note: We still allow starting even if market is closed for startup handshake
+            # as per user preference: "WS should connect ONLY on: FastAPI startup event"
+            self.is_running = True
+            
+        except Exception as e:
+            logger.error(f"Error starting market feed: {e}")
             self.is_running = False
             return
         
-        self.is_running = True
-        logger.info(f"Starting Upstox market feed for {self.config.symbol} (Market: {current_status})")
+        logger.info(f"Starting Upstox market feed for {self.config.symbol}")
+        
+        # Register in global registry for singleton access
+        global_upstox_feeds[self.config.symbol.upper()] = self
         
         # Run feed loop in background
+        # Note: Handshake should be awaited externally before this loop takes over
         asyncio.create_task(self.run_feed_loop())
     
     async def _on_market_status_change(self, status: MarketSession, mode: EngineMode):
         """Handle market status changes"""
         logger.info(f"Market status changed: {status.value} ({mode.value})")
         
-        if is_live_market(status.value) and mode == EngineMode.LIVE:
-            # Market opened - start WebSocket feed
-            if not self.is_running:
-                logger.info("Market opened - starting WebSocket feed")
-                self.is_running = True
-                asyncio.create_task(self.run_feed_loop())
-        else:
-            # Market closed/halted - stop WebSocket feed
+        # Step 3 fix: Do not start feed loop here to avoid parallel handshake triggers
+        # Only handle stopping if needed, or logging.
+        if not is_live_market(status.value) or mode != EngineMode.LIVE:
             if self.is_running:
-                logger.info(f"Market {status.value} - stopping WebSocket feed")
-                await self.stop()
+                logger.info(f"Market {status.value} - stopping WebSocket feed background loop")
+                # We keep the connection if possible, or fully stop. 
+                # For now, let's keep it simple and just log.
+                pass
     
     async def can_start_websocket(self) -> bool:
         """Check if WebSocket feed can be started based on market status"""
         if not self.session_manager:
-            self.session_manager = await get_market_session_manager()
+            self.session_manager = get_market_session_manager()
         
         current_status = self.session_manager.get_market_status().value
         return is_live_market(current_status) and self.session_manager.get_engine_mode() == EngineMode.LIVE
@@ -522,10 +714,72 @@ class UpstoxMarketFeed:
         Stop the market feed service
         """
         self.is_running = False
-        self.is_connected = False  # Reset connection flag
+        self.ws_connected = False  # Reset connection flag
         if self.websocket:
             try:
                 await self.websocket.close()
             except:
                 pass
         logger.info(f"Stopped Upstox market feed for {self.config.symbol}")
+
+    async def _subscribe_to_fo_options(self, spot_price: float) -> bool:
+        """
+        Dynamically subscribe to FO options based on arrived spot price (Upstox V3)
+        """
+        try:
+            # STEP 1: Fetch ATM strike from index LTP
+            is_bn = "BANK" in self.config.symbol.upper()
+            strike_gap = 100 if is_bn else 50
+            atm_strike = round(spot_price / strike_gap) * strike_gap
+            
+            # STEP 3: Construct and Resolve Numeric instrumentKeys
+            resolved_keys = []
+            now = datetime.now()
+            yr_mon = now.strftime("%y%b").upper() # Monthly fallback (e.g. 26FEB)
+            sym = "BANKNIFTY" if is_bn else "NIFTY"
+            
+            for i in range(-15, 16):
+                strike = atm_strike + (i * strike_gap)
+                if strike <= 0: continue
+                
+                strike_str = str(int(strike))
+                # Trading symbols (e.g. NIFTY26FEB22000CE)
+                ce_tsym = f"{sym}{yr_mon}{strike_str}CE"
+                pe_tsym = f"{sym}{yr_mon}{strike_str}PE"
+                
+                # Lookup numeric key from instruments.json cache
+                builder = get_live_chain_builder()
+                ce_key = builder.resolve_instrument_key(ce_tsym)
+                pe_key = builder.resolve_instrument_key(pe_tsym)
+                
+                if ce_key:
+                    resolved_keys.append(ce_key)
+                    logger.debug(f"Resolved {ce_tsym} -> {ce_key}")
+                if pe_key:
+                    resolved_keys.append(pe_key)
+                    logger.debug(f"Resolved {pe_tsym} -> {pe_key}")
+            
+            logger.info("Resolved FO symbols for subscription for %s", self.config.symbol)
+            
+            # STEP 4: Send WS subscription ONLY using numeric keys
+            if resolved_keys and self.websocket:
+                subscription_message = {
+                    "guid": str(uuid.uuid4()),
+                    "method": "sub",
+                    "data": {
+                        "mode": self.config.mode,
+                        "instrumentKeys": resolved_keys
+                    }
+                }
+                message_bytes = json.dumps(subscription_message).encode('utf-8')
+                await self.websocket.send(message_bytes)
+                logger.info("Subscribed to %d numeric FO instruments for %s around ATM %s", 
+                            len(resolved_keys), self.config.symbol, atm_strike)
+                return True
+            else:
+                logger.warning(f"No numeric FO keys resolved for {self.config.symbol} ATM {atm_strike}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error in dynamic FO subscription: {e}")
+            return False

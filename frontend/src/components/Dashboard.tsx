@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, memo } from 'react';
 import { WifiOff, TrendingUp, TrendingDown, Minus, Activity, AlertTriangle, Database, RefreshCw } from 'lucide-react';
-import { useLiveMarketData } from '../hooks/useLiveMarketDataEnhanced';
+import { useLiveMarketData } from '../hooks/useLiveMarketData';
 import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
 import MarketStatusIndicator from './MarketStatusIndicator';
 import DebugBadge from './DebugBadge';
@@ -123,53 +123,16 @@ export default function Dashboard({ initialSymbol = "NIFTY" }: DashboardProps) {
     }
   }, [mode]);
 
-  // Fetch expiries on mount
+  // Use expiries from WebSocket data
   useEffect(() => {
-    const fetchExpiries = async () => {
-      try {
-        const res = await fetch(
-          `http://localhost:8000/api/v1/options/contract/${symbol}`
-        );
-
-        if (!res.ok) {
-          console.warn(`HTTP error while fetching expiries! status: ${res.status}`);
-          const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
-          setExpiryList(fallbackExpiries);
-          setSelectedExpiry(fallbackExpiries[0]);
-          return;
-        }
-
-        const json = await res.json();
-
-        if (json?.status === "success" && json?.data) {
-          // Handle both expiries array formats
-          const expiries = Array.isArray(json.data.expiries) ? json.data.expiries : json.data;
-          setExpiryList(expiries);
-          console.log("📅 Fetched expiries:", expiries);
-
-          if (expiries.length > 0) {
-            setSelectedExpiry(expiries[0]);
-            console.log("✅ Auto-selected expiry:", expiries[0]);
-          }
-        } else {
-          // Fallback to hardcoded expiries if API fails
-          const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
-          setExpiryList(fallbackExpiries);
-          setSelectedExpiry(fallbackExpiries[0]);
-          console.log("📅 Using fallback expiries:", fallbackExpiries);
-        }
-      } catch (err) {
-        console.error("Failed to fetch expiries", err);
-        // Fallback to hardcoded expiries on error
-        const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
-        setExpiryList(fallbackExpiries);
-        setSelectedExpiry(fallbackExpiries[0]);
-        console.log("📅 Using fallback expiries due to error:", fallbackExpiries);
+    if (data?.available_expiries && data.available_expiries.length > 0) {
+      setExpiryList(data.available_expiries);
+      if (!selectedExpiry) {
+        setSelectedExpiry(data.available_expiries[0]);
+        console.log("✅ Auto-selected expiry from WebSocket:", data.available_expiries[0]);
       }
-    };
-
-    fetchExpiries();
-  }, [symbol]);
+    }
+  }, [data?.available_expiries, selectedExpiry]);
 
   // LOADING STATE FIX with snapshot mode support
   if (loading) {

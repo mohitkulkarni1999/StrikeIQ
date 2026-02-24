@@ -1,6 +1,7 @@
 import type { AppProps } from 'next/app';
 import { useEffect } from 'react';
 import { AuthProvider } from '@/contexts/AuthContext';
+import { WebSocketProvider } from '@/contexts/WebSocketContext';
 import Navbar from '@/components/layout/Navbar';
 import AppBootstrapGuard from '@/components/AppBootstrapGuard';
 import '@/styles/globals.css';
@@ -60,12 +61,14 @@ function MyApp({ Component, pageProps }: AppProps) {
 
   return (
     <AuthProvider>
-      <AppBootstrapGuard>
-        <div className="min-h-screen bg-background text-text-primary">
-          <Navbar />
-          <Component {...pageProps} />
-        </div>
-      </AppBootstrapGuard>
+      <WebSocketProvider>
+        <AppBootstrapGuard>
+          <div className="min-h-screen bg-background text-text-primary">
+            <Navbar />
+            <Component {...pageProps} />
+          </div>
+        </AppBootstrapGuard>
+      </WebSocketProvider>
     </AuthProvider>
   );
 }

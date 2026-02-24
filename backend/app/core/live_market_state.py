@@ -9,6 +9,7 @@ from typing import Dict, List, Optional, Any
 from dataclasses import dataclass, field
 import json
 import logging
+import re
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,7 @@ class SymbolMarketState:
     ws_tick_price: Optional[float] = None
     ws_last_update_ts: Optional[datetime] = None
     ws_strikes: Dict[float, StrikeData] = field(default_factory=dict)
+    ws_tick_count: int = 0  # Track number of WebSocket ticks received
     
     # Sticky ATM calculation
     current_atm_strike: Optional[float] = None
@@ -65,6 +67,12 @@ class SymbolMarketState:
     last_update: Optional[datetime] = None
     total_oi_calls: int = 0
     total_oi_puts: int = 0
+    
+    # Legacy compatibility field for LiveStructuralEngine
+    spot: Optional[float] = None
+    
+    # Current expiry for option chain
+    expiry: Optional[str] = None
     
     def get_atm_strike(self) -> Optional[float]:
         """Get sticky ATM strike (prevents oscillation from frequent WS ticks)"""
@@ -174,6 +182,10 @@ class MarketStateManager:
             state = self.market_states[symbol]
             state.last_update = datetime.now(timezone.utc)
             
+            # Increment WebSocket tick counter for live data updates
+            if data.get("ltp") or data.get("last_price"):
+                state.ws_tick_count += 1
+            
             # Parse instrument key to determine type
             instrument_type = self._parse_instrument_type(instrument_key)
             
@@ -232,25 +244,33 @@ class MarketStateManager:
             self._recalculate_totals(state)
     
     def _parse_instrument_type(self, instrument_key: str) -> str:
-        """Parse instrument type from key"""
+        """Parse instrument type from key supporting V2 and V3 formats"""
         if "INDEX" in instrument_key:
             return "spot"
-        elif instrument_key.endswith("-CE"):
+        
+        # Support V2 (-CE) and V3 (CE)
+        key_upper = instrument_key.upper()
+        if key_upper.endswith("CE") or key_upper.endswith("-CE"):
             return "call"
-        elif instrument_key.endswith("-PE"):
+        elif key_upper.endswith("PE") or key_upper.endswith("-PE"):
             return "put"
         return "unknown"
     
     def _extract_strike_from_key(self, instrument_key: str) -> Optional[float]:
-        """Extract strike price from instrument key"""
+        """Extract strike price from instrument key supporting V2 and V3"""
         try:
-            # Format: NFO_FO|25500-CE or NFO_FO|25500-PE
-            parts = instrument_key.split("|")
-            if len(parts) >= 2:
-                strike_part = parts[1]
-                strike = float(strike_part.split("-")[0])
-                return strike
-        except:
+            # Support V2: NFO_FO|25500-CE
+            if "-" in instrument_key:
+                parts = instrument_key.split("|")
+                if len(parts) >= 2:
+                    return float(parts[1].split("-")[0])
+            
+            # Support V3: NSE_FO|NIFTY26FEB22000CE
+            # Regex to find numbers immediately preceding CE or PE at the end
+            match = re.search(r'(\d+)(?:CE|PE)$', instrument_key.upper())
+            if match:
+                return float(match.group(1))
+        except Exception:
             pass
         return None
     
@@ -287,6 +307,111 @@ class MarketStateManager:
         Update LTP for a specific instrument
         """
         await self.update_instrument_data(symbol, instrument_key, {"ltp": ltp})
+    
+    async def update_expiry(self, symbol: str, new_expiry: str) -> None:
+        """
+        Update the current expiry for a symbol
+        """
+        try:
+            async with self._lock:
+                # Get or create symbol state
+                if symbol not in self.market_states:
+                    self.market_states[symbol] = SymbolMarketState(symbol=symbol)
+                
+                state = self.market_states[symbol]
+                old_expiry = state.expiry
+                state.expiry = new_expiry
+                
+                logger.info(f"Updated expiry for {symbol}: {old_expiry} -> {new_expiry}")
+                
+        except Exception as e:
+            logger.error(f"Failed to update expiry for {symbol}: {e}")
+
+    async def update_ws_tick_price(self, symbol: str, instrument_key: str, data: Dict[str, Any]) -> None:
+        """
+        Update market state specifically from internal WebSocket tick events (SINGLETON SYNC)
+        """
+        async with self._lock:
+            if symbol not in self.market_states:
+                self.market_states[symbol] = SymbolMarketState(symbol=symbol)
+            
+            state = self.market_states[symbol]
+            state.ws_last_update_ts = datetime.now(timezone.utc)
+            state.ws_tick_count += 1
+            
+            inst_type = self._parse_instrument_type(instrument_key)
+            
+            if inst_type == "spot":
+                val = data.get("ltp")
+                if val:
+                    state.ws_tick_price = float(val)
+                    state.spot = state.ws_tick_price # Compatibility
+            elif inst_type in ["call", "put"]:
+                strike = self._extract_strike_from_key(instrument_key)
+                if strike:
+                    if strike not in state.ws_strikes:
+                        state.ws_strikes[strike] = StrikeData(strike=strike)
+                    
+                    strike_data = state.ws_strikes[strike]
+                    
+                    # Create instrument snapshot
+                    inst_data = InstrumentData(
+                        instrument_key=instrument_key,
+                        ltp=data.get("ltp"),
+                        oi=data.get("oi"),
+                        volume=data.get("volume"),
+                        delta=data.get("delta"),
+                        gamma=data.get("gamma"),
+                        theta=data.get("theta"),
+                        vega=data.get("vega"),
+                        iv=data.get("iv"),
+                        last_update=datetime.now(timezone.utc)
+                    )
+                    
+                    if inst_type == "call":
+                        strike_data.call = inst_data
+                    else:
+                        strike_data.put = inst_data
+                    
+                    # Update combined strikes map for builder
+                    if strike not in state.strikes:
+                        state.strikes[strike] = StrikeData(strike=strike)
+                    
+                    combined = state.strikes[strike]
+                    if inst_type == "call": combined.call = inst_data
+                    else: combined.put = inst_data
+                    
+            state.last_update = datetime.now(timezone.utc)
+    
+    async def wait_for_snapshot_tick(self, symbol: str, timeout: float = 10.0) -> bool:
+        """
+        Wait for the second snapshot tick after expiry change
+        """
+        try:
+            state = await self.get_symbol_state(symbol)
+            if not state:
+                logger.warning(f"No market state for {symbol}")
+                return False
+            
+            # Wait for at least 2 WebSocket ticks to ensure new data is received
+            initial_tick_count = getattr(state, 'ws_tick_count', 0)
+            target_tick_count = initial_tick_count + 2
+            
+            start_time = datetime.now(timezone.utc)
+            while (datetime.now(timezone.utc) - start_time).total_seconds() < timeout:
+                current_tick_count = getattr(state, 'ws_tick_count', 0)
+                if current_tick_count >= target_tick_count:
+                    logger.info(f"Received {current_tick_count} ticks for {symbol}, ready for rebuild")
+                    return True
+                
+                await asyncio.sleep(0.5)  # Check every 500ms
+            
+            logger.warning(f"Timeout waiting for snapshot ticks for {symbol}")
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error waiting for snapshot tick: {e}")
+            return False
     
     async def update_rest_option_chain(self, symbol: str, option_data: Dict[str, Any]) -> None:
         """
@@ -541,3 +666,20 @@ class MarketStateManager:
                 "symbols": list(self.market_states.keys()),
                 "last_update": max((state.last_update for state in self.market_states.values() if state.last_update), default=None)
             }
+    
+    async def update_rest_spot_price(self, symbol: str, spot_price: float) -> None:
+        """
+        Update REST spot price for a symbol
+        """
+        async with self._lock:
+            # Get or create symbol state
+            if symbol not in self.market_states:
+                self.market_states[symbol] = SymbolMarketState(symbol=symbol)
+            
+            state = self.market_states[symbol]
+            state.rest_spot_price = spot_price
+            state.spot_price = spot_price
+            state.spot = spot_price
+            state.rest_last_update = datetime.now(timezone.utc)
+            
+            print(f"[MarketStateManager] Updated REST spot for {symbol}: {spot_price}")

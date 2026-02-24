@@ -6,12 +6,23 @@ Handles market status polling and engine mode switching
 import asyncio
 import logging
 from typing import Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 import httpx
 from .upstox_auth_service import get_upstox_auth_service
 from .token_manager import get_token_manager
+from app.utils.upstox_retry import retry_on_upstox_401
 from fastapi import HTTPException
+
+def get_ist_time():
+    """Get current IST time"""
+    return datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+
+def is_nse_trading_hours():
+    """Check if current time is within NSE trading hours"""
+    ist = datetime.now(timezone.utc) + timedelta(hours=5, minutes=30)
+    t = ist.time()
+    return time(9,15) <= t <= time(15,30)
 
 logger = logging.getLogger(__name__)
 
@@ -102,61 +113,43 @@ class MarketSessionManager:
             except Exception as e:
                 logger.error(f"Error in market status polling: {e}")
                 await asyncio.sleep(10)  # Short retry on error
-    
+
+    @retry_on_upstox_401
+    async def _fetch_market_status_api(self):
+        """Internal method to fetch market status with retry logic"""
+        token = await self.auth_service.get_valid_access_token()
+        return await self.client.get(
+            "https://api.upstox.com/v2/market/status/NSE",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+
     async def update_market_status(self) -> MarketSession:
         """Fetch and update market status from Upstox API"""
         try:
-            # Get valid access token
-            token = await self.auth_service.get_valid_access_token()
-            if not token:
-                logger.error("No access token available for market status")
-                await self._set_status(MarketSession.UNKNOWN, EngineMode.OFFLINE)
-                return MarketSession.UNKNOWN
+            response = await self._fetch_market_status_api()
             
-            # Call Upstox market status API
-            response = await self.client.get(
-                "https://api.upstox.com/v2/market/status/NSE",
-                headers={"Authorization": f"Bearer {token}"}
-            )
-            
-            if response.status_code == 401:
-                logger.error("Token expired fetching market status")
-                self.token_manager.invalidate("Market status token expired")
-                await self._set_status(MarketSession.UNKNOWN, EngineMode.OFFLINE)
-                return MarketSession.UNKNOWN
-            elif response.status_code != 200:
+            if response.status_code != 200:
                 logger.error(f"Market status API error: {response.status_code}")
+                # If we still get 401 after retry, invalidate
+                if response.status_code == 401:
+                    self.token_manager.invalidate("Market status token unauthorized after retry")
                 await self._set_status(MarketSession.UNKNOWN, EngineMode.OFFLINE)
                 return MarketSession.UNKNOWN
             
             data = response.json()
-            status_str = data.get("status", "UNKNOWN").upper()
             
-            # Map Upstox status to our enum
-            if status_str == "OPEN":
+            # TASK 4 - Keep Upstox API only for logging
+            exchange_data = data.get("data", {}).get("NSE", {})
+            api_status = exchange_data.get("status", "CLOSED")
+            logger.info(f"Upstox exchange status: {api_status}")
+            
+            # TASK 3 - Use IST trading time window instead of API
+            if is_nse_trading_hours():
                 new_status = MarketSession.OPEN
                 new_mode = EngineMode.LIVE
-            elif status_str == "PRE_OPEN":
-                new_status = MarketSession.PRE_OPEN
-                new_mode = EngineMode.SNAPSHOT
-            elif status_str == "OPENING_END":
-                new_status = MarketSession.OPENING_END
-                new_mode = EngineMode.SNAPSHOT
-            elif status_str == "CLOSING":
-                new_status = MarketSession.CLOSING
-                new_mode = EngineMode.SNAPSHOT
-            elif status_str == "CLOSING_END":
-                new_status = MarketSession.CLOSING_END
-                new_mode = EngineMode.SNAPSHOT
-            elif status_str == "CLOSED":
+            else:
                 new_status = MarketSession.CLOSED
                 new_mode = EngineMode.SNAPSHOT
-            elif status_str == "HALTED":
-                new_status = MarketSession.HALTED
-                new_mode = EngineMode.HALTED
-            else:
-                new_status = MarketSession.UNKNOWN
-                new_mode = EngineMode.OFFLINE
             
             await self._set_status(new_status, new_mode)
             logger.info(f"Market status updated: {new_status.value} ({new_mode.value})")
@@ -174,11 +167,17 @@ class MarketSessionManager:
         
         self.current_status = status
         self.current_engine_mode = mode
-        self.last_status_check = datetime.now(timezone.utc)
+        self.last_status_check = get_ist_time()
+        
+        # TASK 4 - FORCE LIVE MODE
+        # When market_status == OPEN: EngineMode must be LIVE
+        if status == MarketSession.OPEN:
+            self.current_engine_mode = EngineMode.LIVE
+            mode_changed = True  # Force mode change notification
         
         if status_changed or mode_changed:
-            logger.info(f"Market status changed: {status.value} ({mode.value})")
-            await self._notify_status_change(status, mode)
+            logger.info(f"Market status changed: {status.value} ({self.current_engine_mode.value})")
+            await self._notify_status_change(status, self.current_engine_mode)
     
     async def _notify_status_change(self, status: MarketSession, mode: EngineMode):
         """Notify all registered callbacks of status change"""
@@ -208,6 +207,14 @@ class MarketSessionManager:
     def is_market_open(self) -> bool:
         """Check if market is open for live trading"""
         return self.current_status == MarketSession.OPEN
+    
+    @property
+    def market_status(self) -> str:
+        """Get market status as string for WebSocket publishing"""
+        if self.current_status == MarketSession.OPEN:
+            return "OPEN"
+        else:
+            return "CLOSED"
     
     def is_live_mode(self) -> bool:
         """Check if engines should run in live mode"""
@@ -240,7 +247,7 @@ class MarketSessionManager:
 market_session_manager = MarketSessionManager()
 
 # Convenience functions
-async def get_market_session_manager() -> MarketSessionManager:
+def get_market_session_manager() -> MarketSessionManager:
     """Get the global market session manager instance"""
     return market_session_manager
 

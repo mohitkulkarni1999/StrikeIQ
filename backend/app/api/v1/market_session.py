@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 async def get_market_session():
     """Get current market session status and engine mode"""
     try:
-        manager = await get_market_session_manager()
+        manager = get_market_session_manager()
         status_info = manager.get_status_info()
         
         return {
@@ -42,7 +42,7 @@ async def get_market_session():
 async def refresh_market_status():
     """Force refresh market status"""
     try:
-        manager = await get_market_session_manager()
+        manager = get_market_session_manager()
         new_status = await manager.force_status_check()
         
         return {
@@ -63,7 +63,7 @@ async def refresh_market_status():
 async def get_simple_status():
     """Get simple market status for quick frontend checks"""
     try:
-        manager = await get_market_session_manager()
+        manager = get_market_session_manager()
         
         return {
             "market_status": manager.get_market_status().value,
@@ -81,7 +81,7 @@ async def get_simple_status():
 async def get_session_health():
     """Get health status of market session manager"""
     try:
-        manager = await get_market_session_manager()
+        manager = get_market_session_manager()
         status_info = manager.get_status_info()
         
         # Determine health based on last check time

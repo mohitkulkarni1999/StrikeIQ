@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from ..models.market_data import MarketSnapshot, OptionChainSnapshot
 from ..models.database import SessionLocal
 from .upstox_auth_service import get_upstox_auth_service
+from app.utils.upstox_retry import retry_on_upstox_401
 
 class PollerService:
     def __init__(self):
@@ -44,7 +45,7 @@ class PollerService:
     async def _poll_symbol(self, symbol: str, token: str, db: Session):
         """Poll specific symbol and its option chain"""
         # 1. Fetch Spot Price (v3)
-        spot_price_data = await self._fetch_spot_price(symbol, token)
+        spot_price_data = await self._fetch_spot_price(symbol, token=token)
         if not spot_price_data:
             return
 
@@ -65,8 +66,9 @@ class PollerService:
         # For simplicity, we'll try to get the nearest expiry first
         # In a real system, we'd fetch expiries from /option/contract
         # For now, we'll implement a basic expiry detection or fetch all
-        await self._poll_option_chain(symbol, snapshot.id, token, db)
+        await self._poll_option_chain(symbol, snapshot.id, token=token, db=db)
 
+    @retry_on_upstox_401
     async def _fetch_spot_price(self, symbol: str, token: str) -> Optional[Dict[str, Any]]:
         # Map symbol to Upstox key
         mapping = {
@@ -91,6 +93,7 @@ class PollerService:
                 logging.error(f"Error fetching spot price for {symbol}: {e}")
         return None
 
+    @retry_on_upstox_401
     async def _poll_option_chain(self, symbol: str, snapshot_id: int, token: str, db: Session):
         """Fetch option chain for the symbol"""
         mapping = {

@@ -1,241 +1,186 @@
 """
-Live WebSocket Endpoints - Enhanced with Real Upstox Feed Integration
-Provides real-time market data and analytics to frontend
+Live WebSocket Endpoints - Live Option Chain Builder
+Implements WS-scoped option chain building using Upstox V3 feed
 """
 
 import asyncio
 import json
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from fastapi import WebSocket, WebSocketDisconnect, APIRouter, HTTPException
-from app.services.upstox_market_feed import UpstoxMarketFeed, FeedConfig
-from app.services.live_structural_engine import LiveStructuralEngine
-from app.services.token_manager import get_token_manager
+from app.services.websocket_market_feed import WebSocketFeedManager, ws_feed_manager
 from app.services.upstox_auth_service import get_upstox_auth_service
-from app.core.live_market_state import MarketStateManager
+from app.services.market_session_manager import get_market_session_manager
+from app.services.live_option_chain_builder import get_live_chain_builder, LiveOptionChainBuilder
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 logger = logging.getLogger(__name__)
 
-# Global instances
-market_state_manager = MarketStateManager()
-live_analytics_engine = LiveStructuralEngine(market_state_manager)
-token_manager = get_token_manager()
-auth_service = get_upstox_auth_service()
+async def safe_cancel_task(task: Optional[asyncio.Task]) -> None:
+    """
+    Safely cancel a background task without double cancellation
+    """
+    if task and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass  # Expected cancellation
+        except Exception as e:
+            logger.error(f"Error cancelling task: {e}")
+
+async def stream_live_chain(symbol: str, websocket: WebSocket, builder: LiveOptionChainBuilder):
+    """
+    STEP 2: Background broadcast loop for live option chain updates
+    """
+    logger.info(f"Starting broadcast stream for {symbol}")
+    try:
+        from app.services.market_session_manager import get_market_session_manager
+        session_manager = get_market_session_manager()
+        
+        while True:
+            try:
+                # Build final option chain payload from global builder
+                payload = await builder.build_chain_payload(symbol)
+                
+                if payload:
+                    # Add market status structure if needed, but user didn't specify it in Step 2.
+                    # However, they said "Expected: client receives market_data every second."
+                    # Structure: {"status": "market_data", "data": payload}
+                    await websocket.send_json({
+                        "status": "market_data",
+                        "data": payload,
+                        "market_status": str(session_manager.market_status),
+                        "timestamp": datetime.now(timezone.utc).isoformat()
+                    })
+                
+                # STEP 2: Wait 1 second before next update
+                await asyncio.sleep(1)
+                
+            except (WebSocketDisconnect, RuntimeError):
+                # Connection closed
+                logger.info(f"Broadcast loop detected disconnect for {symbol}, stopping.")
+                break
+            except Exception as e:
+                logger.error(f"Error in broadcast loop for {symbol}: {e}")
+                await asyncio.sleep(2)
+                
+    except asyncio.CancelledError:
+        logger.info(f"Broadcast stream cancelled for {symbol}")
+    except Exception as e:
+        logger.error(f"Broadcast stream error for {symbol}: {e}")
 
 @router.websocket("/live-options/{symbol}")
-async def websocket_endpoint(websocket: WebSocket, symbol: str):
+async def websocket_endpoint(websocket: WebSocket, symbol: str, expiry: Optional[str] = None, expiry_date: Optional[str] = None):
     """
-    Enhanced WebSocket endpoint for live options data streaming.
-    Sends real-time market data from MarketStateManager (NOT REST).
+    Live Option Chain Builder WebSocket endpoint
+    Implements WS-scoped subscriptions and real-time chain building
     """
-    print(f"🔌 WebSocket connection attempt - symbol: {symbol}")
-    logger.info(f"WebSocket connection attempt - symbol: {symbol}")
+    
+    # Handle expiry parameter from frontend - support both formats
+    final_expiry = expiry or expiry_date
+    
+    if not final_expiry or final_expiry in [None, "null", "None", "", "undefined"]:
+        raise ValueError("Expiry is required for option chain")
+    
+    logger.info(f"WebSocket connection - symbol: {symbol}, expiry: {final_expiry}")
+    
+    await websocket.accept()
+    logger.info(f"WebSocket accepted for {symbol}")
+    
+    # Get services
+    auth_service = get_upstox_auth_service()
+    session_manager = get_market_session_manager()
+    
+    # Get shared WebSocket feed (reuse existing)
+    ws_feed = ws_feed_manager.feed
+
+    if not ws_feed or not ws_feed.is_connected:
+        await websocket.close(code=1011)
+        print("🔴 WS FEED NOT RUNNING")
+        return
+    feed_task: Optional[asyncio.Task] = None
     
     try:
-        # Check token validity first
+        # Check authentication
         token = await auth_service.get_valid_access_token()
         if not token:
-            logger.warning("Authentication required for WebSocket: No valid credentials available")
-            raise HTTPException(status_code=403, detail="Upstox authentication required")
-        
-        await websocket.accept()
-        print(f"✅ WebSocket accepted for {symbol}")
-        logger.info(f"WebSocket accepted for {symbol}")
+            logger.warning("Authentication required for WebSocket")
+            await websocket.send_json({
+                "status": "error",
+                "message": "Authentication required",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            return
         
         # Send initial connection message
         await websocket.send_json({
-            "status": "connected", 
+            "status": "connected",
             "symbol": symbol,
-            "message": "WebSocket connection successful - Live streaming enabled",
+            "message": "WebSocket connection successful",
             "timestamp": datetime.now(timezone.utc).isoformat()
         })
-        print(f"📡 Connection message sent to {symbol}")
         
-        # Start analytics engine if not already running
-        asyncio.create_task(live_analytics_engine.start_analytics_loop(interval_seconds=2))
+        # Get market status
+        market_status = str(session_manager.market_status)
         
-        # Main message loop - send live market data from MarketStateManager
-        while True:
-            try:
-                # Get live market data from MarketStateManager (populated by Upstox feed)
-                market_data = await market_state_manager.get_live_data_for_frontend(symbol)
-                
-                # Get analytics data
-                analytics_data = await live_analytics_engine.get_metrics_for_frontend(symbol)
-                
-                if market_data:
-                    # Build response with required fields including separated REST and WS data
-                    response_data = {
-                        "status": "live_update",
-                        "symbol": symbol,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        # Separated data sources as requested
-                        "rest_spot_price": market_data.get("rest_spot_price"),
-                        "ws_tick_price": market_data.get("ws_tick_price"),
-                        "atm_strike": market_data.get("atm_strike"),
-                        "current_atm_strike": market_data.get("current_atm_strike"),
-                        "atm_last_updated": market_data.get("atm_last_updated"),
-                        "option_chain": {
-                            "symbol": symbol,
-                            "spot": market_data.get("spot_price"),  # Combined (WS preferred)
-                            "expiry": "current",  # Will be populated by feed
-                            "calls": [],
-                            "puts": []
-                        },
-                        "greeks": {},  # Will be populated by feed
-                        "analytics": analytics_data,
-                        "market_data": {
-                            "total_oi_calls": market_data.get("total_oi_calls", 0),
-                            "total_oi_puts": market_data.get("total_oi_puts", 0),
-                            "pcr": market_data.get("pcr", 0),
-                            "strikes": market_data.get("strikes", {})
-                        },
-                        # Additional metadata for data source identification
-                        "data_source": "websocket_stream",
-                        "ws_last_update": market_data.get("ws_last_update_ts"),
-                        "rest_last_update": market_data.get("rest_last_update")
-                    }
-                    
-                    # Populate option chain with strike data
-                    strikes = market_data.get("strikes", {})
-                    calls = []
-                    puts = []
-                    
-                    for strike_price, strike_info in strikes.items():
-                        # Add call data
-                        if strike_info.get("call"):
-                            calls.append({
-                                "strike": strike_price,
-                                "ltp": strike_info["call"].get("ltp"),
-                                "oi": strike_info["call"].get("oi"),
-                                "delta": strike_info["call"].get("delta"),
-                                "gamma": strike_info["call"].get("gamma"),
-                                "theta": strike_info["call"].get("theta"),
-                                "vega": strike_info["call"].get("vega"),
-                                "iv": strike_info["call"].get("iv"),
-                                "volume": strike_info["call"].get("volume"),
-                                "change": strike_info["call"].get("change", 0)
-                            })
-                        
-                        # Add put data
-                        if strike_info.get("put"):
-                            puts.append({
-                                "strike": strike_price,
-                                "ltp": strike_info["put"].get("ltp"),
-                                "oi": strike_info["put"].get("oi"),
-                                "delta": strike_info["put"].get("delta"),
-                                "gamma": strike_info["put"].get("gamma"),
-                                "theta": strike_info["put"].get("theta"),
-                                "vega": strike_info["put"].get("vega"),
-                                "iv": strike_info["put"].get("iv"),
-                                "volume": strike_info["put"].get("volume"),
-                                "change": strike_info["put"].get("change", 0)
-                            })
-                    
-                    # Sort calls and puts by strike price
-                    calls.sort(key=lambda x: x["strike"])
-                    puts.sort(key=lambda x: x["strike"])
-                    
-                    response_data["option_chain"]["calls"] = calls
-                    response_data["option_chain"]["puts"] = puts
-                    
-                    # Send to frontend
-                    await websocket.send_json(response_data)
-                    print(f"📡 Live update sent to {symbol}: REST_SPOT={market_data.get('rest_spot_price')}, WS_TICK={market_data.get('ws_tick_price')}, ATM={market_data.get('current_atm_strike')}, Strikes={len(strikes)}")
-                    
-                    # Show specific changing values
-                    ws_tick = market_data.get("ws_tick_price")
-                    rest_spot = market_data.get("rest_spot_price")
-                    current_atm = market_data.get("current_atm_strike")
-                    
-                    if ws_tick and current_atm:
-                        print(f"  {symbol}: WS={ws_tick} -> ATM={current_atm} (gap: {abs(ws_tick - current_atm):.1f})")
-                    elif rest_spot and current_atm:
-                        print(f"  {symbol}: REST={rest_spot} -> ATM={current_atm} (gap: {abs(rest_spot - current_atm):.1f})")
-                
-                else:
-                    # Send heartbeat if no data available yet
-                    await websocket.send_json({
-                        "status": "heartbeat",
-                        "symbol": symbol,
-                        "message": "Market data connecting...",
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "data_source": "websocket_stream"
-                    })
-                
-                # Wait before next update (real-time streaming)
-                await asyncio.sleep(0.5)  # 500ms for real-time updates
-                
-            except WebSocketDisconnect:
-                print(f"🔌 WebSocket disconnected for {symbol}")
-                break
-            except Exception as e:
-                print(f"❌ Error sending data to {symbol}: {e}")
-                await asyncio.sleep(1)
-                
-    except WebSocketDisconnect:
-        print(f"🔌 WebSocket disconnected for {symbol}")
-    except HTTPException as e:
-        if e.status_code == 401:
-            print(f"🔐 Authentication required for {symbol}")
-            logger.warning(f"Authentication required for WebSocket: {e.detail}")
-            
-            # Send auth_required message before closing
-            try:
-                await websocket.send_json({
-                    "status": "auth_required",
-                    "message": "Authentication required",
-                    "detail": e.detail,
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                })
-                await asyncio.sleep(0.1)  # Brief delay to ensure message is sent
-            except:
-                pass
-            finally:
-                try:
-                    await websocket.close()
-                except:
-                    pass
-        else:
-            print(f"❌ HTTP error for {symbol}: {e}")
-            try:
-                await websocket.close()
-            except:
-                pass
-    except Exception as e:
-        print(f"❌ WebSocket error for {symbol}: {e}")
+        # Force LIVE mode when market is OPEN
+        if market_status == "OPEN":
+            current_engine_mode = session_manager.get_engine_mode()
+            if current_engine_mode.value != "LIVE":
+                logger.info(f"Market is OPEN, forcing LIVE mode (was {current_engine_mode.value})")
+                await session_manager.update_market_status()
+        
+        # GET SHARED FEED FROM APP STATE
+        upstox_feeds = getattr(websocket.app.state, 'upstox_feeds', {})
+        ws_feed = upstox_feeds.get('shared')
+        
+        if not ws_feed:
+            logger.error("Shared WebSocket feed not available")
+            await websocket.send_json({
+                "status": "error",
+                "message": "WebSocket feed not initialized",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+            return
+
+        # Use factory function to get builder instance
+        builder = get_live_chain_builder()
+        
+        # Initialize chain if not already done
         try:
-            await websocket.close()
+            await builder.initialize_option_chain(symbol, final_expiry)
+            logger.info("Initialized builder for %s", symbol)
+        except Exception as e:
+            logger.warning(f"Builder already initialized for {symbol} or initialization failed: {e}")
+
+        logger.info(f"Using shared feed for {symbol}")
+        
+        # STEP 1: Start background broadcast task using the shared builder
+        broadcast_task = asyncio.create_task(stream_live_chain(symbol, websocket, builder))
+        
+        try:
+            # Keep connection open and listen for messages or disconnect
+            while True:
+                data = await websocket.receive_text()
+                # Handle incoming messages if any...
+                
+        except WebSocketDisconnect:
+            logger.info(f"WebSocket disconnected for {symbol}")
+        finally:
+            # Clean up background task
+            await safe_cancel_task(broadcast_task)
+            logger.info(f"Client stream for {symbol} disconnected")
+    
+    except Exception as e:
+        logger.error(f"WebSocket error for {symbol}: {e}")
+        try:
+            await websocket.send_json({
+                "status": "error",
+                "message": f"WebSocket error: {str(e)}",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
         except:
             pass
-
-@router.websocket("/test")
-async def test_ws(websocket: WebSocket):
-    """Simple test WebSocket endpoint"""
-    print("🔌 Test WebSocket connection attempt")
-    try:
-        await websocket.accept()
-        print("✅ Test WebSocket accepted")
-        
-        while True:
-            await websocket.send_text("ping")
-            print("📡 Sent ping")
-            await asyncio.sleep(1)
-            
-    except Exception as e:
-        print(f"❌ Test WebSocket error: {e}")
-        try:
-            await websocket.close()
-        except:
-            pass
-
-# Cleanup endpoint for graceful shutdown
-@router.post("/cleanup/{symbol}")
-async def cleanup_feed(symbol: str):
-    """Cleanup Upstox feed for a symbol"""
-    # This would access the global app.state.upstox_feeds
-    # For now, return success
-    return {"status": "cleaned_up", "symbol": symbol}

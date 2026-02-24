@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
+import api from '../api/axios';
 import { DashboardResponse, isAuthRequired, AuthRequiredData, MarketData } from '@/types/dashboard';
 
 interface AuthState {
@@ -95,16 +96,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
     dispatch({ type: 'AUTH_CHECK_START' });
 
     try {
-      const response = await fetch('/api/dashboard/NIFTY');
-      if (!response.ok) {
-        throw new Error(`HTTP Error: ${response.status}`);
-      }
-      const data: DashboardResponse = await response.json();
-
-      if (isAuthRequired(data)) {
-        dispatch({ type: 'AUTH_REQUIRED', payload: { login_url: data.login_url } });
-      } else {
+      // For now, assume auth is successful if we can reach the WebSocket init endpoint
+      // This avoids REST polling and relies on WebSocket connection
+      const response = await api.get('/api/ws/init');
+      
+      if (response.status === 200) {
         dispatch({ type: 'AUTH_CHECK_SUCCESS', isAuthenticated: true });
+      } else {
+        dispatch({ type: 'AUTH_CHECK_ERROR', error: 'Authentication check failed' });
       }
     } catch (error) {
       dispatch({ type: 'AUTH_CHECK_ERROR', error: error instanceof Error ? error.message : 'Unknown error' });

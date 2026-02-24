@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Clock, Wifi, WifiOff, AlertCircle } from 'lucide-react';
+import api from '../api/axios';
 
 interface MarketSession {
   market_status: 'OPEN' | 'CLOSED' | 'PRE_OPEN' | 'OPENING_END' | 'CLOSING' | 'CLOSING_END' | 'HALTED' | 'UNKNOWN';
@@ -23,13 +24,8 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
   useEffect(() => {
     const fetchMarketStatus = async () => {
       try {
-        const response = await fetch('/api/v1/market/session');
-        if (!response.ok) {
-          setError(`HTTP Error: ${response.status}`);
-          setLoading(false);
-          return;
-        }
-        const result = await response.json();
+        const response = await api.get('/api/v1/market/session');
+        const result = response.data;
 
         if (result.status === 'success') {
           setSession(result.data);

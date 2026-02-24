@@ -1,4 +1,5 @@
-
+import { useState, useEffect } from 'react';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 export interface LiveMarketData {
     symbol: string;
@@ -53,232 +54,134 @@ interface UseLiveMarketDataReturn {
     loading: boolean;
     error: string | null;
     mode: 'loading' | 'snapshot' | 'live' | 'error';
+    isConnected: boolean;
+    symbol: string;
+    availableExpiries: string[];
+    lastUpdate: string;
 }
 
 /**
- * Hybrid WebSocket + REST Market Data Hook
- * - Uses WebSocket for real-time options chain data
- * - Falls back to REST API when WebSocket fails
- * - Provides best of both worlds: real-time streaming + reliability
+ * WebSocket-only Market Data Hook
+ * - Uses global WebSocket context for real-time data
+ * - No REST polling - relies entirely on WebSocket
+ * - Provides real-time streaming data
  */
-
 export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
-    console.log(" useLiveMarketData INIT", { symbol, expiry });
+    console.log("🔌 useLiveMarketData INIT", { symbol, expiry });
 
-    const [data, setData] = useState<any>(null);
+    const [data, setData] = useState<LiveMarketData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'error'>('loading');
-    const [isConnected, setIsConnected] = useState<boolean>(false);
 
-    // Refs for WebSocket lifecycle
-    const wsRef = useRef<WebSocket | null>(null);
-    const reconnectRef = useRef<number>(0);
-    const mountedRef = useRef<boolean>(true);
-    const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+    // Use global WebSocket context
+    const { isConnected, lastMessage, connect, error: wsError } = useWebSocket();
 
-    // Mount/unmount handling
+    // Handle WebSocket messages
     useEffect(() => {
-        mountedRef.current = true;
-        return () => {
-            mountedRef.current = false;
-            if (wsRef.current) {
-                wsRef.current.close();
-                wsRef.current = null;
-            }
-            if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-            }
-            console.log(" Cleaned up market data connections");
-        };
-    }, []);
+        if (!lastMessage) return;
 
-    // WebSocket connection function
-    const connectWebSocket = useCallback((symbol: string, expiry: string | null) => {
-        if (!symbol) return;
-
-        const url = expiry
-            ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
-            : `ws://localhost:8000/ws/live-options/${symbol}`;
-
-        console.log(" CONNECTING TO WebSocket:", url);
-
-        const ws = new WebSocket(url);
-        wsRef.current = ws;
-
-        ws.onopen = () => {
-            if (!mountedRef.current) return;
-
-            reconnectRef.current = 0;
-            setError(null);
-            setLoading(false);
-            setMode('live');
-            setIsConnected(true);
-            console.log(" WebSocket Connected for real-time data");
-        };
-
-        ws.onmessage = (event) => {
-            if (!mountedRef.current) return;
-
-            try {
-                console.log(" RAW WS MESSAGE:", event.data);
-                const messageData = JSON.parse(event.data);
-
-                // Handle different message types
-                if (messageData.status === 'connected') {
-                    console.log(" Initial connection message received");
-                    setData(prev => ({
-                        ...prev,
-                        ...messageData,
-                        available_expiries: messageData.available_expiries || []
-                    }));
-                } else if (messageData.status === 'live_update') {
-                    console.log(" Live update received");
-
-                    // Transform backend payload to frontend expected shape
-                    const transformedData = {
-                        ...messageData,
-                        // Map intelligence directly
-                        intelligence: messageData.intelligence || {},
-                        // Map pin_probability directly  
-                        pin_probability: messageData.pin_probability,
-                        // Map optionChain from option_chain_snapshot
-                        optionChain: messageData.option_chain_snapshot ? {
-                            symbol: messageData.option_chain_snapshot.symbol,
-                            spot: messageData.option_chain_snapshot.spot,
-                            expiry: messageData.option_chain_snapshot.expiry,
-                            calls: messageData.option_chain_snapshot.calls || [],
-                            puts: messageData.option_chain_snapshot.puts || []
-                        } : null,
-                        // Extract confidence from intelligence
-                        confidence: messageData.intelligence?.bias?.confidence || messageData.intelligence?.confidence,
-                        // Map expiries for frontend
-                        expiries: messageData.available_expiries || []
-                    };
-
-                    setData(prev => ({
-                        ...prev,
-                        ...transformedData
-                    }));
-                } else if (messageData.status === 'auth_required') {
-                    setError('Authentication required');
-                    setMode('error');
-                } else if (messageData.status === 'auth_error') {
-                    setError('Authentication service unavailable');
-                    setMode('error');
-                }
-            } catch (err) {
-                console.error(' Error parsing WebSocket message:', err);
-            }
-        };
-
-        ws.onclose = (event) => {
-            if (!mountedRef.current) return;
-
-            console.log(` WebSocket closed: ${event.code} ${event.reason}`);
-
-            // Don't reconnect for manual closes or auth errors
-            if (event.code === 1000 || mode === 'error') {
-                console.log(' Manual close or error, not reconnecting');
-                return;
-            }
-
-            // Exponential backoff with max cap
-            const delay = Math.min(10000, 1000 * 2 ** reconnectRef.current);
-            reconnectRef.current += 1;
-
-            console.log(` Reconnecting WebSocket in ${delay}ms (attempt ${reconnectRef.current})`);
-            setTimeout(() => {
-                if (mountedRef.current && wsRef.current?.readyState !== WebSocket.OPEN) {
-                    connectWebSocket(symbol, expiry);
-                }
-            }, delay);
-        };
-
-        ws.onerror = (error) => {
-            if (!mountedRef.current) return;
-
-            console.error(' WebSocket Error:', error);
-            setError('Connection error');
-
-            // Close to trigger reconnect logic
-            if (wsRef.current) {
-                wsRef.current.close();
-            }
-        };
-    }, [symbol, expiry]);
-
-    // REST API polling fallback
-    const pollMarketData = useCallback(async () => {
-        if (!symbol || !mountedRef.current) return;
+        console.log("📨 Processing WebSocket message:", lastMessage);
 
         try {
-            setLoading(true);
-            setError(null);
-
-            // Build API URL with optional expiry
-            const apiUrl = expiry
-                ? `/api/v1/market-data/${symbol}?expiry=${encodeURIComponent(expiry)}`
-                : `/api/v1/market-data/${symbol}`;
-
-            console.log("📡 FETCHING:", apiUrl);
-
-            const response = await fetch(apiUrl);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const result = await response.json();
-
-            if (result.status === 'success') {
-                setData(result.data);
+            // Handle different message types
+            if (lastMessage.status === 'connected') {
+                console.log("✅ Initial connection message received");
+                setData(prev => ({
+                    ...prev,
+                    ...lastMessage,
+                    available_expiries: lastMessage.available_expiries || []
+                }));
                 setMode('live');
-                console.log("✅ Market data fetched successfully");
-            } else {
-                throw new Error(result.error || 'Failed to fetch market data');
+                setLoading(false);
+            } else if (lastMessage.status === 'live_update') {
+                console.log("🔄 Live update received");
+
+                // Transform backend payload to frontend expected shape
+                const transformedData: LiveMarketData = {
+                    ...lastMessage,
+                    // Map intelligence directly
+                    intelligence: lastMessage.intelligence || {},
+                    // Map pin_probability directly  
+                    pin_probability: lastMessage.pin_probability,
+                    // Map optionChain from option_chain_snapshot
+                    optionChain: lastMessage.option_chain_snapshot ? {
+                        symbol: lastMessage.option_chain_snapshot.symbol,
+                        spot: lastMessage.option_chain_snapshot.spot,
+                        expiry: lastMessage.option_chain_snapshot.expiry,
+                        calls: lastMessage.option_chain_snapshot.calls || [],
+                        puts: lastMessage.option_chain_snapshot.puts || []
+                    } : null,
+                    // Extract confidence from intelligence
+                    confidence: lastMessage.intelligence?.bias?.confidence || lastMessage.intelligence?.confidence,
+                    // Map expiries for frontend
+                    expiries: lastMessage.available_expiries || [],
+                    // Ensure required fields
+                    symbol: symbol,
+                    spot: lastMessage.spot || 0,
+                    timestamp: lastMessage.timestamp || new Date().toISOString()
+                };
+
+                setData(prev => ({
+                    ...prev,
+                    ...transformedData
+                }));
+                setMode('live');
+                setLoading(false);
+            } else if (lastMessage.status === 'auth_required') {
+                setError('Authentication required');
+                setMode('error');
+            } else if (lastMessage.status === 'auth_error') {
+                setError('Authentication service unavailable');
+                setMode('error');
             }
         } catch (err) {
-            console.error('❌ Market data fetch error:', err);
-            setError(err instanceof Error ? err.message : 'Failed to fetch market data');
+            console.error('❌ Error parsing WebSocket message:', err);
+            setError('Failed to parse WebSocket message');
             setMode('error');
-        } finally {
-            setLoading(false);
         }
-    }, [symbol, expiry]);
+    }, [lastMessage, symbol]);
 
-    // Start polling on mount
+    // Handle WebSocket errors
     useEffect(() => {
-        mountedRef.current = true;
+        if (wsError) {
+            console.error('❌ WebSocket error from context:', wsError);
+            setError(wsError);
+            setMode('error');
+        }
+    }, [wsError]);
 
-        // Initial fetch
-        pollMarketData();
+    // Update connection status
+    useEffect(() => {
+        if (isConnected) {
+            console.log('✅ WebSocket connected, setting mode to live');
+            setMode('live');
+            setLoading(false);
+            setError(null);
+        } else {
+            console.log('❌ WebSocket disconnected');
+            setMode('loading');
+            setLoading(true);
+        }
+    }, [isConnected]);
 
-        // Set up polling interval (every 15 seconds)
-        pollIntervalRef.current = setInterval(() => {
-            if (mountedRef.current) {
-                pollMarketData();
-            }
-        }, 15000); // 15 seconds
-
-        return () => {
-            mountedRef.current = false;
-
-            if (pollIntervalRef.current) {
-                clearInterval(pollIntervalRef.current);
-            }
-
-            console.log("🧹 Cleaned up market data polling");
-        };
-    }, [symbol, expiry, pollMarketData]);
-
+    // Initialize connection if not connected and we have symbol/expiry
+    useEffect(() => {
+        if (symbol && expiry && !isConnected && mode === 'loading') {
+            console.log(`🚀 Initializing WebSocket connection for ${symbol} with expiry ${expiry}`);
+            connect(symbol, expiry);
+        }
+    }, [symbol, expiry, isConnected, mode, connect]);
 
     return {
         data,
         loading,
         error,
         mode,
-        isConnected: true, // Always "connected" for REST API
+        isConnected,
         symbol,
         availableExpiries: data?.available_expiries || [],
-        lastUpdate: new Date().toISOString()
+        lastUpdate: new Date().toISOString(),
+        status: null
     };
 }

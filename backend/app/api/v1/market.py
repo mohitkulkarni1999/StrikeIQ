@@ -36,7 +36,7 @@ async def get_ltp(
             "data": {
                 "symbol": symbol.upper(),
                 "spot_price": data.spot_price,
-                "market_status": data.market_status.value if data.market_status else None,
+                "market_status": str(data.market_status) if data.market_status else None,
                 "timestamp": data.timestamp.isoformat() if data.timestamp else None,
                 "session_type": data.session_type.value if data.session_type else None
             },

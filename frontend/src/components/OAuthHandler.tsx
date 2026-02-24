@@ -9,8 +9,12 @@ export default function OAuthHandler({ onAuthSuccess }: OAuthHandlerProps) {
     // Check if we're returning from Upstox OAuth with success
     const urlParams = new URLSearchParams(window.location.search);
     const authStatus = urlParams.get('status');
+    const upstoxStatus = urlParams.get('upstox');
     
-    if (authStatus === 'success' && window.location.pathname.includes('/auth/success')) {
+    // Check for either status=success or upstox=connected
+    const isSuccess = authStatus === 'success' || upstoxStatus === 'connected';
+    
+    if (isSuccess && window.location.pathname.includes('/auth/success')) {
       console.log('OAuth success detected, triggering auth refresh immediately');
       
       // SECURITY: No state validation needed - backend handles it

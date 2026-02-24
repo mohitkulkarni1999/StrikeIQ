@@ -11,6 +11,7 @@ from ...core.config import settings
 import logging
 from datetime import datetime
 import time
+import os
 
 router = APIRouter(prefix="/api/v1/options", tags=["options"])
 logger = logging.getLogger(__name__)
@@ -61,7 +62,7 @@ async def get_auth_status():
                         'session_type': 'AUTH_REQUIRED',
                         'mode': 'AUTH',
                         'message': 'Token validation failed',
-                        'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
+                        'login_url': 'http://localhost:8000/api/v1/auth/upstox',
                         'timestamp': datetime.now().isoformat()
                     }
         else:
@@ -69,7 +70,7 @@ async def get_auth_status():
                 'session_type': 'AUTH_REQUIRED',
                 'mode': 'AUTH', 
                 'message': 'No access token available',
-                'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
+                'login_url': 'http://localhost:8000/api/v1/auth/upstox',
                 'timestamp': datetime.now().isoformat()
             }
         
@@ -86,7 +87,7 @@ async def get_auth_status():
             'session_type': 'AUTH_REQUIRED',
             'mode': 'AUTH',
             'message': f'Auth check failed: {str(e)}',
-            'login_url': f"https://api.upstox.com/v2/login/authorization/dialog?response_type=code&client_id={os.getenv('UPSTOX_API_KEY')}&redirect_uri={os.getenv('UPSTOX_REDIRECT_URI')}",
+            'login_url': 'http://localhost:8000/api/v1/auth/upstox',
             'timestamp': datetime.now().isoformat()
         }
         
@@ -149,7 +150,7 @@ async def get_option_contracts(
         # Get access token
         from ...services.upstox_auth_service import get_upstox_auth_service
         auth_service = get_upstox_auth_service()
-        token = await auth_service.get_valid_access_token()
+        token = auth_service.get_valid_access_token()
         
         if not token:
             raise HTTPException(status_code=401, detail="No access token available")
@@ -157,7 +158,7 @@ async def get_option_contracts(
         # Get instrument key for options contracts (use correct contract mapping)
         try:
             logger.info(f"=== AUDIT: Getting contract instrument key for {symbol} ===")
-            instrument_key = service.get_contract_instrument_key(symbol)
+            instrument_key = await service.get_contract_instrument_key(symbol)
             logger.info(f"=== AUDIT: Got instrument key: {instrument_key} for {symbol} ===")
             logger.info(f"=== AUDIT: Service instance: {service} ===")
             logger.info(f"=== AUDIT: Service methods: {[method for method in dir(service) if not method.startswith('_')]} ===")
@@ -258,6 +259,13 @@ async def get_option_chain(
         chain_data = await service.get_option_chain(symbol, expiry_date)
         logger.info(f"=== INVESTIGATION: Service returned: {type(chain_data)} ===")
         logger.info(f"=== INVESTIGATION: Service response: {str(chain_data)[:200]} ===")
+        
+        # Prevent FastAPI 500 crash - validate data
+        if not chain_data:
+            raise HTTPException(
+                status_code=404,
+                detail="No Option Chain Found"
+            )
         
         # Check if service returned an error response
         if isinstance(chain_data, dict) and "status" in chain_data and chain_data["status"] == "error":

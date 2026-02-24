@@ -32,3 +32,4 @@ async def stop_data_scheduler():
         logging.info("APScheduler: Data collection jobs stopped")
 
 import asyncio
+from .market_data_service import get_latest_option_chain

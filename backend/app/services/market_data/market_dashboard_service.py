@@ -190,7 +190,7 @@ class MarketDashboardService:
             "session_type": "AUTH_REQUIRED",
             "mode": "AUTH",
             "message": "Upstox authentication required",
-            "login_url": upstox_url,
+            "login_url": "http://localhost:8000/api/v1/auth/upstox",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     
@@ -336,12 +336,11 @@ class MarketDashboardService:
             
             return MarketData(
                 symbol=symbol,
-                spot_price=ltp,
+                last_price=ltp,
                 previous_close=None,  # Would need previous close data
                 change=None,         # Would calculate from previous close
                 change_percent=None,  # Would calculate from previous close
-                timestamp=datetime.now(timezone.utc),
-                market_status=market_status
+                timestamp=datetime.now(timezone.utc)
             )
             
         except Exception as e:
@@ -416,12 +415,12 @@ class MarketDashboardService:
         """Format MarketData for API response"""
         return {
             "symbol": market_data.symbol,
-            "spot_price": market_data.spot_price,
+            "last_price": market_data.last_price,
             "previous_close": market_data.previous_close,
             "change": market_data.change,
             "change_percent": market_data.change_percent,
             "timestamp": market_data.timestamp.isoformat(),
-            "market_status": market_data.market_status.value
+            "market_status": str(market_data.market_status)
         }
     
     async def close(self):

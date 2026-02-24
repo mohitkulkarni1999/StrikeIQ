@@ -1,11 +1,43 @@
 import logging
 from typing import Dict, List, Any, Optional
 import math
-from ...exceptions.data_unavailable_error import DataUnavailableError, MissingPremiumError
+from app.exceptions.data_unavailable_error import DataUnavailableError, MissingPremiumError
 
 logger = logging.getLogger(__name__)
 
 class ProbabilityEngine:
+    
+    def __init__(self):
+        self.model = None  # Placeholder for ML model
+    
+    def calculate(self, option_chain):
+        """
+        Safe probability calculation with error handling
+        """
+        try:
+            # For now, use static compute method
+            # In future, this would call self.model.predict(option_chain)
+            if not option_chain:
+                logger.warning("ProbabilityEngine: Empty option_chain received")
+                return None
+                
+            # Extract required data from option_chain
+            spot_price = option_chain.get('spot', 0)
+            calls = option_chain.get('calls', [])
+            puts = option_chain.get('puts', [])
+            volatility_context = option_chain.get('volatility_context', {})
+            bias_score = option_chain.get('bias_score', 50)
+            
+            result = self.compute_expected_move(
+                spot_price, calls, puts, volatility_context, bias_score
+            )
+            
+            logger.info(f"ProbabilityEngine: Calculation successful")
+            return result
+            
+        except Exception as e:
+            logger.error(f"ProbabilityEngine Error: {str(e)}")
+            return None
     
     @staticmethod
     def compute_expected_move(
@@ -28,14 +60,15 @@ class ProbabilityEngine:
         Returns:
             Structured probability output with expected move calculations
         """
-        # Validation Layer - Fail-Safe Mode
-        if not spot_price or not calls or not puts:
-            logger.error(f"[PROBABILITY] Invalid inputs - spot: {spot_price}, calls: {len(calls)}, puts: {len(puts)}")
-            raise DataUnavailableError("Invalid inputs for probability calculation")
-        
-        if spot_price <= 0:
-            raise DataUnavailableError("Invalid spot price for probability calculation")
+        try:
+            # Validation Layer - Fail-Safe Mode
+            if not spot_price or not calls or not puts:
+                logger.error(f"[PROBABILITY] Invalid inputs - spot: {spot_price}, calls: {len(calls)}, puts: {len(puts)}")
+                raise DataUnavailableError("Invalid inputs for probability calculation")
             
+            if spot_price <= 0:
+                raise DataUnavailableError("Invalid spot price for probability calculation")
+                
             # Calculate days to expiry from option chain data
             days_to_expiry = ProbabilityEngine._calculate_days_to_expiry(calls, puts)
             if days_to_expiry <= 0:

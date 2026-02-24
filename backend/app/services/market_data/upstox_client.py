@@ -8,6 +8,7 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from ...core.config import settings
 from .types import InstrumentInfo, APIResponseError, AuthenticationError, TokenExpiredError
+from app.utils.upstox_retry import retry_on_upstox_401
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
@@ -97,83 +98,26 @@ class UpstoxClient:
     def _set_cache(self, cache_key: str, data: Any, ttl: int = None) -> None:
         """Set cache data"""
         try:
-            # Use Redis if available (disabled for now to avoid connection errors)
-            if False and self._redis_client:
-                try:
-                    if ttl:
-                        self._redis_client.setex(cache_key, ttl, json.dumps(data))
-                    else:
-                        self._redis_client.set(cache_key, json.dumps(data))
-                    logger.debug(f"Cached to Redis: {cache_key}")
-                except Exception as e:
-                    logger.warning(f"Redis cache failed, using memory cache: {e}")
-                    self._memory_cache[cache_key] = data
-            else:
-                # Fallback to memory cache
-                self._memory_cache[cache_key] = data
-                logger.debug(f"Cached to memory: {cache_key}")
+            # Fallback to memory cache
+            self._memory_cache[cache_key] = data
+            logger.debug(f"Cached to memory: {cache_key}")
             
             # Set timestamp
             self._cache_timestamps[cache_key] = time.time()
             
         except Exception as e:
             logger.exception("Cache set error")
-            # Don't break the flow for cache errors
     
     def _get_cache(self, cache_key: str) -> Optional[Any]:
         """Get cache data"""
         try:
-            # Use Redis if available
-            if self._redis_client:
-                data = self._redis_client.get(cache_key)
-                if data:
-                    logger.debug(f"Cache hit from Redis: {cache_key}")
-                    return json.loads(data)
-                else:
-                    logger.debug(f"Cache miss from Redis: {cache_key}")
-                    return None
+            # Fallback to memory cache
+            if cache_key in self._memory_cache:
+                logger.debug(f"Cache hit from memory: {cache_key}")
+                return self._memory_cache[cache_key]
             else:
-                # Fallback to memory cache
-                if cache_key in self._memory_cache:
-                    logger.debug(f"Cache hit from memory: {cache_key}")
-                    return self._memory_cache[cache_key]
-                else:
-                    logger.debug(f"Cache miss from memory: {cache_key}")
-                    return None
-            
-        except Exception as e:
-            logger.exception("Cache get error")
-            return None
-    
-    def _is_cache_valid(self, cache_key: str) -> bool:
-        """Check if cache is still valid"""
-        if cache_key not in self._cache_timestamps:
-            return False
-        
-        cache_time = self._cache_timestamps[cache_key]
-        ttl = self._expiry_cache_ttl if 'expiry' in cache_key else self._contracts_cache_ttl
-        return (time.time() - cache_time) < ttl
-    
-    def _get_cache(self, cache_key: str) -> Optional[Any]:
-        """Get cache data"""
-        try:
-            # Use Redis if available
-            if self._redis_client:
-                data = self._redis_client.get(cache_key)
-                if data:
-                    logger.debug(f"Cache hit from Redis: {cache_key}")
-                    return json.loads(data)
-                else:
-                    logger.debug(f"Cache miss from Redis: {cache_key}")
-                    return None
-            else:
-                # Fallback to memory cache
-                if cache_key in self._memory_cache:
-                    logger.debug(f"Cache hit from memory: {cache_key}")
-                    return self._memory_cache[cache_key]
-                else:
-                    logger.debug(f"Cache miss from memory: {cache_key}")
-                    return None
+                logger.debug(f"Cache miss from memory: {cache_key}")
+                return None
             
         except Exception as e:
             logger.exception("Cache get error")
@@ -183,10 +127,15 @@ class UpstoxClient:
         """Get authenticated HTTP client"""
         base_url = self.base_url_v3 if version == "v3" else self.base_url_v2
         
-        if self._client is None:
+        # Recreate client ONLY if token or version changed
+        auth_header = f"Bearer {access_token}"
+        if self._client is None or self._client.headers.get("Authorization") != auth_header:
+            if self._client:
+                await self._client.aclose()
+            
             self._client = httpx.AsyncClient(
                 base_url=base_url,
-                headers={"Authorization": f"Bearer {access_token}"},
+                headers={"Authorization": auth_header},
                 timeout=30.0
             )
         return self._client
@@ -197,6 +146,7 @@ class UpstoxClient:
             await self._client.aclose()
             self._client = None
     
+    @retry_on_upstox_401
     async def _make_request(self, method: str, url: str, access_token: str, **kwargs) -> httpx.Response:
         """Rate-limited request with 429 backoff"""
         async with self._rate_limit:
@@ -215,7 +165,18 @@ class UpstoxClient:
             self._last_request_time = time.time()
             
             client = await self._get_client(access_token)
-            response = await getattr(client, method)(url, **kwargs)
+            
+            # Convert method to lowercase for httpx compatibility
+            method = method.lower()
+            request_fn = getattr(client, method, None)
+            
+            if not request_fn:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+            
+            # Add defensive logging
+            logger.info("Upstox REST call: %s %s", method.upper(), url)
+            
+            response = await request_fn(url, **kwargs)
             
             # Handle 429 rate limiting with exponential backoff
             if response.status_code == 429:
@@ -268,17 +229,23 @@ class UpstoxClient:
                 raise APIResponseError(f"HTTP {response.status_code}: Failed to fetch option contracts")
             
             data = response.json()
-            logger.info(f"Downloaded {len(data)} option contracts for {symbol}")
+            logger.info(f"Downloaded option contracts for {symbol}: {data}")
             
-            # Extract unique expiry dates from real contracts
-            expiries_set = set()
-            for contract in data:
-                expiry = contract.get('expiry')
-                if expiry:
-                    expiries_set.add(expiry)
+            # TASK 3 - FIX EXPIRY PARSING
+            # Handle Upstox response: {"status":"success", "data":["2026-02-24","2026-03-02"]}
+            contracts = data.get("data", [])
+            expiries = []
             
-            # Convert to sorted list
-            expiries = sorted(list(expiries_set))
+            for contract in contracts:
+                if isinstance(contract, str):
+                    expiries.append(contract)
+                elif isinstance(contract, dict):
+                    expiry = contract.get("expiry")
+                    if expiry:
+                        expiries.append(expiry)
+            
+            # Sort expiries
+            expiries = sorted(expiries)
             
             # Cache the result
             self._set_cache(cache_key, expiries, self._expiry_cache_ttl)
@@ -315,6 +282,110 @@ class UpstoxClient:
             
             logger.info(f"Using emergency fallback expiries for {symbol}: {next_thursdays}")
             return next_thursdays
+    
+    async def get_option_contracts(self, access_token: str, symbol: str) -> List[Dict[str, Any]]:
+        """Get option contracts for index from local instruments file"""
+        try:
+            logger.info(f"Loading option contracts for {symbol} from local instruments")
+            
+            # For INDEX symbols, use local instruments.json instead of REST API
+            if symbol.upper() in ["NIFTY", "BANKNIFTY"]:
+                return await self._load_contracts_from_instruments(symbol)
+            
+            # For other symbols, validate and raise error
+            raise ValueError(f"Unsupported symbol: {symbol}. Supported: NIFTY, BANKNIFTY")
+                
+        except Exception as e:
+            logger.exception(f"Exception while fetching option contracts: {e}")
+            raise APIResponseError(f"Failed to fetch option contracts: {str(e)}")
+    
+    async def _load_contracts_from_instruments(self, symbol: str) -> List[Dict[str, Any]]:
+        """Load option contracts from local instruments.json file"""
+        try:
+            import json
+            from pathlib import Path
+            
+            instruments_file = Path("data/instruments.json")
+            if not instruments_file.exists():
+                raise FileNotFoundError(f"Instruments file not found: {instruments_file}")
+            
+            # Load instruments from file with format handling
+            with open(instruments_file, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+            
+            # Handle different instruments.json formats
+            if isinstance(raw, dict) and "instruments" in raw:
+                instruments = raw["instruments"]
+            elif isinstance(raw, list):
+                instruments = raw
+            else:
+                raise ValueError("Invalid instruments.json format")
+            
+            # Filter and transform instruments to builder contract format
+            symbol_upper = symbol.upper()
+            contracts = []
+            
+            for instrument in instruments:
+                # Add type guard
+                if not isinstance(instrument, dict):
+                    continue
+                    
+                # Filter for NSE_FO options matching the symbol
+                if (
+                    instrument.get("segment") == "NSE_FO" and
+                    instrument.get("name") == symbol_upper and
+                    instrument.get("instrument_type") in ["CE", "PE"]
+                ):
+                    # Validate required fields
+                    required_fields = ["strike_price", "expiry", "instrument_key"]
+                    if not all(field in instrument for field in required_fields):
+                        continue
+                    
+                    # Transform to builder contract format
+                    contract = {
+                        "strike": float(instrument["strike_price"]),
+                        "option_type": instrument["instrument_type"],
+                        "expiry": instrument["expiry"],
+                        "instrument_key": instrument["instrument_key"]
+                    }
+                    contracts.append(contract)
+            
+            logger.info(f"Transformed {len(contracts)} contracts for {symbol}")
+            return contracts
+            
+        except Exception as e:
+            logger.error(f"Failed to load contracts from instruments.json: {e}")
+            raise
+    
+    async def get_instruments(self, access_token: str) -> List[Dict[str, Any]]:
+        """Get all instruments from Upstox API"""
+        try:
+            logger.info("Fetching instruments from Upstox API")
+            
+            response = await self._make_request(
+                "GET",
+                f"{self.base_url_v2}/instruments",
+                access_token
+            )
+            
+            if response.status_code == 200:
+                data = response.json()
+                instruments = data.get("data", [])
+                logger.info(f"Retrieved {len(instruments)} instruments from Upstox API")
+                return instruments
+            elif response.status_code == 401:
+                logger.error("Token expired while fetching instruments")
+                raise TokenExpiredError("Access token expired")
+            elif response.status_code == 403:
+                logger.error("Access forbidden while fetching instruments")
+                raise AuthenticationError("Access forbidden")
+            else:
+                logger.error(f"Failed to fetch instruments: {response.status_code} - {response.text}")
+                raise APIResponseError(f"API Error: {response.status_code}")
+                
+        except Exception as e:
+            logger.exception(f"Exception while fetching instruments: {e}")
+            raise APIResponseError(f"Failed to fetch instruments: {str(e)}")
     
     async def get_option_chain(self, access_token: str, instrument_key: str, expiry_date: str = None) -> Dict[str, Any]:
         """Fetch option chain from Upstox API - WORKING ENDPOINT"""
