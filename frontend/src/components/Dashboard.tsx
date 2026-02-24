@@ -3,7 +3,7 @@
 import React, { useState, useEffect, memo } from 'react';
 import { WifiOff, TrendingUp, TrendingDown, Minus, Activity, AlertTriangle, Database, RefreshCw } from 'lucide-react';
 import { useLiveMarketData } from '../hooks/useLiveMarketDataEnhanced';
-import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from '../components/SafeModeGuard';
+import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
 import MarketStatusIndicator from './MarketStatusIndicator';
 import DebugBadge from './DebugBadge';
 import ProbabilityDisplay from './ProbabilityDisplay';
@@ -69,122 +69,130 @@ function ErrorBlock({ message }: { message: string }) {
 
 // ─── Main Dashboard ────────────────────────────────────────────────────────────
 
-export default function Dashboard() {
-    console.log("🚀 ENHANCED DASHBOARD COMPONENT ACTIVE");
-    const [symbol, setSymbol] = useState("NIFTY");
-    const [expiryList, setExpiryList] = useState<string[]>([]);
-    const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
+interface DashboardProps {
+  initialSymbol?: string;
+}
 
-    // Use enhanced hook with market session support
-    const { data, status, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
+export default function Dashboard({ initialSymbol = "NIFTY" }: DashboardProps) {
+  console.log("🚀 ENHANCED DASHBOARD COMPONENT ACTIVE for", initialSymbol);
+  const [symbol, setSymbol] = useState(initialSymbol);
+  const [expiryList, setExpiryList] = useState<string[]>([]);
+  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
 
-    // Mode guards and analytics
-    const isLiveMode = useModeGuard(mode, 'LIVE');
-    const isSnapshotMode = useModeGuard(mode, 'SNAPSHOT');
-    const isHaltedMode = useModeGuard(mode, 'HALTED');
-    const effectiveSpot = useEffectiveSpot(data, mode);
-    const snapshotAnalytics = useSnapshotAnalytics(mode, data?.data_source || '');
-    const timeoutProtection = useTimeoutProtection(mode);
-    
-    // Analytics enabled guard
-    const isAnalyticsEnabled = data?.analytics_enabled !== false;
-    
-    console.log("🔍 Dashboard Mode Analysis:", {
-        mode,
-        isLiveMode,
-        isSnapshotMode,
-        isHaltedMode,
-        effectiveSpot,
-        engineMode: status?.engine_mode,
-        dataSource: data?.data_source,
-        isAnalyticsEnabled
-    });
+  // Use enhanced hook with market session support
+  const { data, status, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
 
-    console.log("📦 Dashboard selectedExpiry:", selectedExpiry);
-    console.log("📦 Dashboard data:", data);
-    console.log("📦 Dashboard status:", status);
-    console.log("Dashboard error:", error);
+  // Mode guards and analytics
+  const isLiveMode = useModeGuard(mode, 'LIVE');
+  const isSnapshotMode = useModeGuard(mode, 'SNAPSHOT');
+  const isHaltedMode = useModeGuard(mode, 'HALTED');
+  const effectiveSpot = useEffectiveSpot(data, mode);
+  const snapshotAnalytics = useSnapshotAnalytics(mode, data?.data_source || '');
+  const timeoutProtection = useTimeoutProtection(mode);
 
-    const safeError = typeof error === "string" ? error : null;
+  // Analytics enabled guard
+  const isAnalyticsEnabled = data?.analytics_enabled !== false;
 
-    // ENGINE MODE UI VALIDATION GUARD
-    React.useEffect(() => {
-        if (mode !== "live") {
-            console.log(`🛡️ ENGINE MODE GUARD: Disabling live animations - Mode: ${mode}`);
-            // Disable live animations
-            document.body.classList.add('snapshot-mode');
+  console.log("🔍 Dashboard Mode Analysis:", {
+    mode,
+    isLiveMode,
+    isSnapshotMode,
+    isHaltedMode,
+    effectiveSpot,
+    engineMode: status?.engine_mode,
+    dataSource: data?.data_source,
+    isAnalyticsEnabled
+  });
+
+  console.log("📦 Dashboard selectedExpiry:", selectedExpiry);
+  console.log("📦 Dashboard data:", data);
+  console.log("📦 Dashboard status:", status);
+  console.log("Dashboard error:", error);
+
+  const safeError = typeof error === "string" ? error : null;
+
+  // ENGINE MODE UI VALIDATION GUARD
+  React.useEffect(() => {
+    if (mode !== "live") {
+      console.log(`🛡️ ENGINE MODE GUARD: Disabling live animations - Mode: ${mode}`);
+      // Disable live animations
+      document.body.classList.add('snapshot-mode');
+    } else {
+      console.log("✅ ENGINE MODE GUARD: Enabling live animations");
+      document.body.classList.remove('snapshot-mode');
+    }
+  }, [mode]);
+
+  // Fetch expiries on mount
+  useEffect(() => {
+    const fetchExpiries = async () => {
+      try {
+        const res = await fetch(
+          `http://localhost:8000/api/v1/options/contract/${symbol}`
+        );
+
+        if (!res.ok) {
+          console.warn(`HTTP error while fetching expiries! status: ${res.status}`);
+          const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
+          setExpiryList(fallbackExpiries);
+          setSelectedExpiry(fallbackExpiries[0]);
+          return;
+        }
+
+        const json = await res.json();
+
+        if (json?.status === "success" && json?.data) {
+          // Handle both expiries array formats
+          const expiries = Array.isArray(json.data.expiries) ? json.data.expiries : json.data;
+          setExpiryList(expiries);
+          console.log("📅 Fetched expiries:", expiries);
+
+          if (expiries.length > 0) {
+            setSelectedExpiry(expiries[0]);
+            console.log("✅ Auto-selected expiry:", expiries[0]);
+          }
         } else {
-            console.log("✅ ENGINE MODE GUARD: Enabling live animations");
-            document.body.classList.remove('snapshot-mode');
+          // Fallback to hardcoded expiries if API fails
+          const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
+          setExpiryList(fallbackExpiries);
+          setSelectedExpiry(fallbackExpiries[0]);
+          console.log("📅 Using fallback expiries:", fallbackExpiries);
         }
-    }, [mode]);
+      } catch (err) {
+        console.error("Failed to fetch expiries", err);
+        // Fallback to hardcoded expiries on error
+        const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
+        setExpiryList(fallbackExpiries);
+        setSelectedExpiry(fallbackExpiries[0]);
+        console.log("📅 Using fallback expiries due to error:", fallbackExpiries);
+      }
+    };
 
-    // Fetch expiries on mount
-    useEffect(() => {
-        const fetchExpiries = async () => {
-            try {
-                const res = await fetch(
-                    `http://localhost:8000/api/v1/options/contract/${symbol}` 
-                );
-                
-                if (!res.ok) {
-                    throw new Error(`HTTP error! status: ${res.status}`);
-                }
-                
-                const json = await res.json();
+    fetchExpiries();
+  }, [symbol]);
 
-                if (json?.status === "success" && json?.data) {
-                    // Handle both expiries array formats
-                    const expiries = Array.isArray(json.data.expiries) ? json.data.expiries : json.data;
-                    setExpiryList(expiries);
-                    console.log("📅 Fetched expiries:", expiries);
-
-                    if (expiries.length > 0) {
-                        setSelectedExpiry(expiries[0]);
-                        console.log("✅ Auto-selected expiry:", expiries[0]);
-                    }
-                } else {
-                    // Fallback to hardcoded expiries if API fails
-                    const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
-                    setExpiryList(fallbackExpiries);
-                    setSelectedExpiry(fallbackExpiries[0]);
-                    console.log("📅 Using fallback expiries:", fallbackExpiries);
-                }
-            } catch (err) {
-                console.error("Failed to fetch expiries", err);
-                // Fallback to hardcoded expiries on error
-                const fallbackExpiries = ["2026-02-24", "2026-03-02", "2026-03-10", "2026-03-17", "2026-03-24"];
-                setExpiryList(fallbackExpiries);
-                setSelectedExpiry(fallbackExpiries[0]);
-                console.log("📅 Using fallback expiries due to error:", fallbackExpiries);
-            }
-        };
-
-        fetchExpiries();
-    }, [symbol]);
-
-    // LOADING STATE FIX with snapshot mode support
-    if (loading) {
-        if (mode === 'snapshot') {
-            return <SnapshotReadyBlock />;
-        }
-        return <LoadingBlock />;
+  // LOADING STATE FIX with snapshot mode support
+  if (loading) {
+    if (mode === 'snapshot') {
+      return <SnapshotReadyBlock />;
     }
+    return <LoadingBlock />;
+  }
 
-    if (safeError) {
-        return <ErrorBlock message={safeError} />;
-    }
+  if (safeError) {
+    return <ErrorBlock message={safeError} />;
+  }
 
-    // TIMEOUT PROTECTION - Don't render live components in snapshot mode
-    if (mode === 'snapshot' && !data) {
-        return <SnapshotReadyBlock />;
-    }
+  // TIMEOUT PROTECTION - Don't render live components in snapshot mode
+  if (mode === 'snapshot' && !data) {
+    return <SnapshotReadyBlock />;
+  }
 
   return (
     <div className="bg-background text-text-primary min-h-screen">
       {/* MAIN CONTENT WRAPPER */}
       <div className="grid grid-cols-12 gap-3 p-3">
-        
+
         {/* ROW 1 - TOP SPOT STRIP */}
         <div className="col-span-12 bg-card border border-border rounded-md p-3">
           <div className="grid grid-cols-12 gap-3 items-center">
@@ -194,7 +202,7 @@ export default function Dashboard() {
                 {symbol}
               </div>
             </div>
-            
+
             {/* Spot Price */}
             <div className="col-span-3">
               <div className="text-lg font-mono font-bold text-text-primary">
@@ -204,38 +212,36 @@ export default function Dashboard() {
                 )}
               </div>
             </div>
-            
+
             {/* Price Change */}
             <div className="col-span-2">
               <div className={`text-sm font-mono font-bold ${data?.change >= 0 ? 'text-bullish' : 'text-bearish'}`}>
                 {data?.change >= 0 ? '+' : ''}{data?.change_percent?.toFixed(2)}%
               </div>
             </div>
-            
+
             {/* Market Status */}
             <div className="col-span-2">
-              <div className={`text-xs font-mono px-2 py-1 rounded border ${
-                status?.market_status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
+              <div className={`text-xs font-mono px-2 py-1 rounded border ${status?.market_status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
                 status?.market_status === 'PRE_OPEN' ? 'bg-yellow-500/20 text-yellow-400 border-yellow-500/40' :
-                status?.market_status === 'CLOSED' ? 'bg-red-500/20 text-red-400 border-red-500/40' :
-                status?.market_status === 'HALTED' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
-                'bg-gray-500/20 text-gray-400 border-gray-500/40'
-              }`}>
+                  status?.market_status === 'CLOSED' ? 'bg-red-500/20 text-red-400 border-red-500/40' :
+                    status?.market_status === 'HALTED' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
+                      'bg-gray-500/20 text-gray-400 border-gray-500/40'
+                }`}>
                 {status?.market_status || 'UNKNOWN'}
               </div>
             </div>
-            
+
             {/* Engine Mode Indicator */}
             <div className="col-span-2">
-              <div className={`text-xs font-mono px-2 py-1 rounded border ${
-                mode === 'live' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
+              <div className={`text-xs font-mono px-2 py-1 rounded border ${mode === 'live' ? 'bg-green-500/20 text-green-400 border-green-500/40' :
                 mode === 'snapshot' ? 'bg-blue-500/20 text-blue-400 border-blue-500/40' :
-                mode === 'halted' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
-                'bg-gray-500/20 text-gray-400 border-gray-500/40'
-              }`}>
-                {mode === 'live' ? 'LIVE' : 
-                 mode === 'snapshot' ? 'SNAPSHOT' :
-                 mode === 'halted' ? 'HALTED' : 'OFFLINE'}
+                  mode === 'halted' ? 'bg-red-600/20 text-red-500 border-red-600/40' :
+                    'bg-gray-500/20 text-gray-400 border-gray-500/40'
+                }`}>
+                {mode === 'live' ? 'LIVE' :
+                  mode === 'snapshot' ? 'SNAPSHOT' :
+                    mode === 'halted' ? 'HALTED' : 'OFFLINE'}
               </div>
             </div>
           </div>
@@ -247,26 +253,25 @@ export default function Dashboard() {
           <div className="space-y-2">
             {/* Signal Tag */}
             <div className="flex items-center gap-2">
-              <div className={`text-xs font-bold px-2 py-1 rounded ${
-                data?.intelligence?.bias?.label === 'BULLISH' ? 'bg-green-500/20 text-green-400' :
+              <div className={`text-xs font-bold px-2 py-1 rounded ${data?.intelligence?.bias?.label === 'BULLISH' ? 'bg-green-500/20 text-green-400' :
                 data?.intelligence?.bias?.label === 'BEARISH' ? 'bg-red-500/20 text-red-400' :
-                'bg-neutral-500/20 text-neutral-400'
-              }`}>
+                  'bg-neutral-500/20 text-neutral-400'
+                }`}>
                 {data?.intelligence?.bias?.label || 'HOLD'}
               </div>
               <div className="text-xs text-text-secondary">
                 Strength: {data?.intelligence?.bias?.score?.toFixed(1) || '0.0'}
               </div>
             </div>
-            
+
             {/* Confidence Bar */}
             <div className="w-full bg-border rounded-full h-2">
-              <div 
+              <div
                 className="h-full bg-analytics-500 rounded-full transition-all"
                 style={{ width: `${Math.abs(data?.intelligence?.bias?.score || 0) * 10}%` }}
               />
             </div>
-            
+
             {/* Additional Info */}
             <div className="text-xs text-text-secondary">
               <div>Confidence: {Math.abs(data?.intelligence?.bias?.score || 0) > 0.7 ? 'HIGH' : Math.abs(data?.intelligence?.bias?.score || 0) > 0.4 ? 'MEDIUM' : 'LOW'}</div>
@@ -298,14 +303,14 @@ export default function Dashboard() {
                 {(data?.spot + (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}
               </div>
             </div>
-            
+
             {/* Bounds */}
             <div className="flex justify-between text-xs text-text-secondary">
               <div>Lower: {(data?.spot - (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}</div>
               <div>Spot: {data?.spot?.toFixed(2)}</div>
               <div>Upper: {(data?.spot + (data?.intelligence?.probability?.expected_move || 0)).toFixed(2)}</div>
             </div>
-            
+
             {/* Risk Badge */}
             <div className="text-xs font-mono px-2 py-1 bg-orange-500/20 text-orange-400 border border-orange-500/40 rounded">
               BREAKOUT RISK: {data?.intelligence?.probability?.breach_probability?.toFixed(0) || '0'}%
@@ -318,19 +323,19 @@ export default function Dashboard() {
           <div className="text-xs font-bold text-text-secondary mb-3">EXPECTED MOVE</div>
           <div className="space-y-2">
             <div className="text-2xl font-mono font-bold text-text-primary">
-              {data?.intelligence?.analytics_enabled ? 
+              {data?.intelligence?.analytics_enabled ?
                 (data?.intelligence?.probability?.expected_move || 0).toFixed(2) :
                 <span className="text-text-secondary">Waiting for valid market data...</span>
               }
             </div>
             <div className="text-xs text-text-secondary">
-              {data?.intelligence?.analytics_enabled ? 
+              {data?.intelligence?.analytics_enabled ?
                 `±${(data?.intelligence?.probability?.upper_1sd || 0).toFixed(2)}` :
                 <span className="text-text-secondary">Std Dev unavailable</span>
               }
             </div>
             <div className="text-xs text-text-secondary">
-              {data?.intelligence?.analytics_enabled ? 
+              {data?.intelligence?.analytics_enabled ?
                 `${((data?.intelligence?.probability?.breach_probability || 0) * 100).toFixed(1)}% chance of breakout` :
                 <span className="text-text-secondary">Breakout analysis unavailable</span>
               }
@@ -423,17 +428,6 @@ export default function Dashboard() {
         <DebugBadge className="col-span-12 mb-3" />
         <MemoizedAIPanel intelligence={data?.intelligence ?? null} />
         <MemoizedAlerts alerts={data?.alerts || []} />
-        <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
-
-        {/* SNAPSHOT MODE LABEL */}
-        {isSnapshotMode && (
-          <div className="col-span-12 bg-blue-500/10 border border-blue-500/30 rounded-md p-3 mb-3">
-            <div className="flex items-center gap-2 text-blue-400">
-              <Database className="w-4 h-4" />
-              <span className="text-sm font-mono font-bold">Snapshot Mode (Market Closed)</span>
-            </div>
-          </div>
-        )}
 
         {/* EXPIRY SELECTOR */}
         {expiryList.length > 0 && (
@@ -452,6 +446,21 @@ export default function Dashboard() {
                 </option>
               ))}
             </select>
+          </div>
+        )}
+
+        {/* OI HEATMAP */}
+        <div className="col-span-12 bg-card border border-border rounded-md p-3">
+          <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
+        </div>
+
+        {/* SNAPSHOT MODE LABEL */}
+        {isSnapshotMode && (
+          <div className="col-span-12 bg-blue-500/10 border border-blue-500/30 rounded-md p-3 mb-3">
+            <div className="flex items-center gap-2 text-blue-400">
+              <Database className="w-4 h-4" />
+              <span className="text-sm font-mono font-bold">Snapshot Mode (Market Closed)</span>
+            </div>
           </div>
         )}
       </div>

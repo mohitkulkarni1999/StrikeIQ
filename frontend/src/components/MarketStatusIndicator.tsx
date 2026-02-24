@@ -24,8 +24,13 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
     const fetchMarketStatus = async () => {
       try {
         const response = await fetch('/api/v1/market/session');
+        if (!response.ok) {
+          setError(`HTTP Error: ${response.status}`);
+          setLoading(false);
+          return;
+        }
         const result = await response.json();
-        
+
         if (result.status === 'success') {
           setSession(result.data);
           setError(null);
@@ -120,7 +125,7 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
       <div className={`flex items-center gap-2 px-2 py-1 border rounded font-mono text-xs ${getStatusColor(session.market_status)}`}>
         <span>{session.market_status}</span>
       </div>
-      
+
       {/* Engine Mode */}
       <div className={`flex items-center gap-1 ${getModeColor(session.engine_mode)}`}>
         {getModeIcon(session.engine_mode)}

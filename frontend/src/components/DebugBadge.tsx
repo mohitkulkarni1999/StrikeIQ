@@ -27,18 +27,22 @@ const DebugBadge: React.FC<DebugBadgeProps> = ({ className = "" }) => {
             try {
                 // Get market session info
                 const sessionResponse = await fetch('/api/v1/market/session');
+                if (!sessionResponse.ok) {
+                    console.warn(`HTTP Error in DebugBadge: ${sessionResponse.status}`);
+                    return;
+                }
                 const sessionResult = await sessionResponse.json();
-                
+
                 if (sessionResult.status === 'success') {
                     const sessionData = sessionResult.data;
-                    
+
                     setDebugInfo({
                         engineMode: sessionData.engine_mode || 'UNKNOWN',
                         marketStatus: sessionData.market_status || 'UNKNOWN',
                         dataSource: sessionData.data_source || 'UNKNOWN',
                         spotSource: sessionData.engine_mode === 'LIVE' ? 'WS' : 'REST',
-                        mode: sessionData.engine_mode === 'LIVE' ? 'LIVE' : 
-                             sessionData.engine_mode === 'HALTED' ? 'HALTED' : 'SNAPSHOT'
+                        mode: sessionData.engine_mode === 'LIVE' ? 'LIVE' :
+                            sessionData.engine_mode === 'HALTED' ? 'HALTED' : 'SNAPSHOT'
                     });
                 }
             } catch (err) {
@@ -47,10 +51,10 @@ const DebugBadge: React.FC<DebugBadgeProps> = ({ className = "" }) => {
         };
 
         fetchDebugInfo();
-        
+
         // Update every 5 seconds
         const interval = setInterval(fetchDebugInfo, 5000);
-        
+
         return () => clearInterval(interval);
     }, []);
 

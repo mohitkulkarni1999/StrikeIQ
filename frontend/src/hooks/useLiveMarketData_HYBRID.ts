@@ -36,19 +36,19 @@ interface UseLiveMarketDataReturn {
 
 export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
     console.log("🔥 useLiveMarketData INIT (HYBRID)", { symbol, expiry });
-    
+
     const [data, setData] = useState<any>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'error'>('loading');
     const [isConnected, setIsConnected] = useState<boolean>(false);
-    
+
     // Refs for WebSocket lifecycle
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectRef = useRef<number>(0);
     const mountedRef = useRef<boolean>(true);
     const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    
+
     // Mount/unmount handling
     useEffect(() => {
         mountedRef.current = true;
@@ -64,23 +64,23 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             console.log("🧹 Cleaned up market data connections");
         };
     }, []);
-    
+
     // WebSocket connection function
     const connectWebSocket = useCallback((symbol: string, expiry: string | null) => {
         if (!symbol) return;
-        
+
         const url = expiry
             ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
             : `ws://localhost:8000/ws/live-options/${symbol}`;
-        
+
         console.log("🔗 CONNECTING TO WebSocket:", url);
-        
+
         const ws = new WebSocket(url);
         wsRef.current = ws;
-        
+
         ws.onopen = () => {
             if (!mountedRef.current) return;
-            
+
             reconnectRef.current = 0;
             setError(null);
             setLoading(false);
@@ -88,14 +88,14 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             setIsConnected(true);
             console.log("✅ WebSocket Connected for real-time data");
         };
-        
+
         ws.onmessage = (event) => {
             if (!mountedRef.current) return;
-            
+
             try {
                 console.log("📡 RAW WS MESSAGE:", event.data);
                 const messageData = JSON.parse(event.data);
-                
+
                 // Handle different message types
                 if (messageData.status === 'connected') {
                     console.log("📦 Initial connection message received");
@@ -106,7 +106,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                     }));
                 } else if (messageData.status === 'live_update') {
                     console.log("📦 Live update received");
-                    
+
                     // Transform backend payload to frontend expected shape
                     const transformedData = {
                         ...messageData,
@@ -127,7 +127,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                         // Map expiries for frontend
                         expiries: messageData.available_expiries || []
                     };
-                    
+
                     setData(prev => ({
                         ...prev,
                         ...transformedData
@@ -143,22 +143,22 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 console.error('❌ Error parsing WebSocket message:', err);
             }
         };
-        
+
         ws.onclose = (event) => {
             if (!mountedRef.current) return;
-            
+
             console.log(`🔌 WebSocket closed: ${event.code} ${event.reason}`);
-            
+
             // Don't reconnect for manual closes or auth errors
             if (event.code === 1000 || mode === 'error') {
                 console.log('🔌 Manual close or error, not reconnecting');
                 return;
             }
-            
+
             // Exponential backoff with max cap
             const delay = Math.min(10000, 1000 * 2 ** reconnectRef.current);
             reconnectRef.current += 1;
-            
+
             console.log(`🔄 Reconnecting WebSocket in ${delay}ms (attempt ${reconnectRef.current})`);
             setTimeout(() => {
                 if (mountedRef.current && wsRef.current?.readyState !== WebSocket.OPEN) {
@@ -166,41 +166,41 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 }
             }, delay);
         };
-        
+
         ws.onerror = (error) => {
             if (!mountedRef.current) return;
-            
+
             console.error('❌ WebSocket Error:', error);
             setError('Connection error');
-            
+
             // Close to trigger reconnect logic
             if (wsRef.current) {
                 wsRef.current.close();
             }
         };
-        
-        // Connect immediately
-        connectWebSocket(symbol, expiry);
-    }, [symbol, expiry, connectWebSocket]);
-    
+    }, [symbol, expiry]);
+
     // REST API polling fallback
     const pollMarketData = useCallback(async () => {
         if (!symbol || !mountedRef.current) return;
-        
+
         try {
             setLoading(true);
             setError(null);
-            
+
             // Build API URL with optional expiry
-            const apiUrl = expiry 
+            const apiUrl = expiry
                 ? `/api/v1/market-data/${symbol}?expiry=${encodeURIComponent(expiry)}`
                 : `/api/v1/market-data/${symbol}`;
-            
+
             console.log("📡 FETCHING REST API:", apiUrl);
-            
+
             const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             const result = await response.json();
-            
+
             if (result.status === 'success') {
                 setData(result.data);
                 setMode('live');
@@ -216,14 +216,14 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             setLoading(false);
         }
     }, [symbol, expiry]);
-    
+
     // Start WebSocket and set up REST fallback
     useEffect(() => {
         mountedRef.current = true;
-        
+
         // Try WebSocket first for real-time data
         connectWebSocket(symbol, expiry);
-        
+
         // Set up REST polling as fallback (every 30 seconds)
         pollIntervalRef.current = setInterval(() => {
             if (mountedRef.current && !isConnected) {
@@ -231,23 +231,23 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 pollMarketData();
             }
         }, 30000); // 30 seconds
-        
+
         return () => {
             mountedRef.current = false;
-            
+
             if (wsRef.current) {
                 wsRef.current.close();
                 wsRef.current = null;
             }
-            
+
             if (pollIntervalRef.current) {
                 clearInterval(pollIntervalRef.current);
             }
-            
+
             console.log("🧹 Cleaned up market data connections");
         };
     }, [symbol, expiry, connectWebSocket, pollMarketData]);
-    
+
     return {
         data,
         loading,

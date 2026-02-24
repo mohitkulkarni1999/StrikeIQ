@@ -36,6 +36,7 @@ interface LiveMarketData {
     market_status?: string;
     engine_mode?: string;
     data_source?: string;
+    analytics_enabled?: boolean;
     // Normalized option chain data
     optionChain?: {
         symbol: string;
@@ -56,6 +57,7 @@ interface UseLiveMarketDataReturn {
     symbol: string;
     availableExpiries: string[];
     lastUpdate: string;
+    effectiveSpot: number;
 }
 
 /**
@@ -66,21 +68,21 @@ interface UseLiveMarketDataReturn {
  */
 export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
     console.log("🚀 Enhanced useLiveMarketData INIT", { symbol, expiry });
-    
+
     const [data, setData] = useState<LiveMarketData | null>(null);
     const [marketStatus, setMarketStatus] = useState<MarketSessionData | null>(null);
     const [loading, setLoading] = useState<boolean>(false);
     const [error, setError] = useState<string | null>(null);
     const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'halted' | 'error'>('loading');
     const [isConnected, setIsConnected] = useState<boolean>(false);
-    
+
     // Refs for lifecycle management
     const wsRef = useRef<WebSocket | null>(null);
     const reconnectRef = useRef<number>(0);
     const mountedRef = useRef<boolean>(true);
     const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
     const marketStatusIntervalRef = useRef<NodeJS.Timeout | null>(null);
-    
+
     // Mount/unmount handling
     useEffect(() => {
         mountedRef.current = true;
@@ -99,17 +101,22 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             console.log("🧹 Enhanced market data connections cleaned up");
         };
     }, []);
-    
+
     // Fetch market session status
     const fetchMarketStatus = useCallback(async () => {
         try {
             const response = await fetch('/api/v1/market/session');
+            if (!response.ok) {
+                console.warn(`HTTP error while fetching market session! status: ${response.status}`);
+                setMode('error');
+                return;
+            }
             const result = await response.json();
-            
+
             if (result.status === 'success') {
                 const sessionData = result.data;
                 setMarketStatus(sessionData);
-                
+
                 // Update mode based on engine_mode
                 switch (sessionData.engine_mode) {
                     case 'LIVE':
@@ -132,7 +139,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                         setMode('error');
                         console.log("❌ FRONTEND MODE ACTIVATED: UNKNOWN MODE");
                 }
-                
+
                 return sessionData;
             }
         } catch (err) {
@@ -140,40 +147,40 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             setMode('error');
         }
     }, []);
-    
+
     // WebSocket connection function (only in LIVE mode)
     const connectWebSocket = useCallback((symbol: string, expiry: string | null) => {
         if (!symbol || mode !== 'live') {
             console.log(`🚫 WebSocket connection skipped - mode: ${mode}`);
             return;
         }
-        
+
         const url = expiry
             ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
             : `ws://localhost:8000/ws/live-options/${symbol}`;
-        
+
         console.log("🔌 CONNECTING TO WebSocket:", url);
-        
+
         const ws = new WebSocket(url);
         wsRef.current = ws;
-        
+
         ws.onopen = () => {
             if (!mountedRef.current) return;
-            
+
             reconnectRef.current = 0;
             setError(null);
             setLoading(false);
             setIsConnected(true);
             console.log("✅ WebSocket Connected for real-time data");
         };
-        
+
         ws.onmessage = (event) => {
             if (!mountedRef.current) return;
-            
+
             try {
                 console.log("📨 RAW WS MESSAGE:", event.data);
                 const messageData = JSON.parse(event.data);
-                
+
                 // Only process WS data in LIVE mode
                 if (mode === 'live') {
                     // Transform backend payload to frontend expected shape
@@ -195,31 +202,31 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                         // Map expiries for frontend
                         available_expiries: messageData.available_expiries || []
                     };
-                    
+
                     setData(prev => ({ ...prev, ...transformedData }));
                 }
             } catch (err) {
                 console.error('❌ Error parsing WebSocket message:', err);
             }
         };
-        
+
         ws.onclose = (event) => {
             if (!mountedRef.current) return;
-            
+
             console.log(`🔌 WebSocket closed: ${event.code} ${event.reason}`);
             setIsConnected(false);
-            
+
             // Don't reconnect for manual closes or non-live modes
             if (event.code === 1000 || mode !== 'live') {
                 console.log('🚫 Manual close or non-live mode, not reconnecting');
                 return;
             }
-            
+
             // Exponential backoff with max cap (only in LIVE mode)
             if (mode === 'live') {
                 const delay = Math.min(10000, 1000 * 2 ** reconnectRef.current);
                 reconnectRef.current += 1;
-                
+
                 console.log(`🔄 Reconnecting WebSocket in ${delay}ms (attempt ${reconnectRef.current})`);
                 setTimeout(() => {
                     if (mountedRef.current && mode === 'live') {
@@ -228,40 +235,43 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 }, delay);
             }
         };
-        
+
         ws.onerror = (error) => {
             if (!mountedRef.current) return;
-            
+
             console.error('❌ WebSocket Error:', error);
             setError('Connection error');
             setIsConnected(false);
-            
+
             // Close to trigger reconnect logic (only in LIVE mode)
             if (wsRef.current && mode === 'live') {
                 wsRef.current.close();
             }
         };
-        
+
     }, [mode, marketStatus]);
-    
+
     // REST API polling fallback
     const pollMarketData = useCallback(async () => {
         if (!symbol || !mountedRef.current) return;
-        
+
         try {
             setLoading(true);
             setError(null);
-            
+
             // Build API URL with optional expiry
-            const apiUrl = expiry 
+            const apiUrl = expiry
                 ? `/api/v1/market-data/${symbol}?expiry=${encodeURIComponent(expiry)}`
                 : `/api/v1/market-data/${symbol}`;
-            
+
             console.log("📡 FETCHING:", apiUrl);
-            
+
             const response = await fetch(apiUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
             const result = await response.json();
-            
+
             if (result.status === 'success') {
                 const enhancedData = {
                     ...result.data,
@@ -269,9 +279,9 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                     engine_mode: marketStatus?.engine_mode,
                     data_source: marketStatus?.data_source
                 };
-                
+
                 setData(enhancedData);
-                
+
                 // Set mode based on engine_mode from backend
                 if (marketStatus) {
                     // Mode is already set by fetchMarketStatus
@@ -291,25 +301,25 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             setLoading(false);
         }
     }, [symbol, expiry, mode, marketStatus]);
-    
+
     // Start market status monitoring on mount
     useEffect(() => {
         fetchMarketStatus();
-        
+
         // Poll market status every 30 seconds
         marketStatusIntervalRef.current = setInterval(fetchMarketStatus, 30000);
-        
+
         return () => {
             if (marketStatusIntervalRef.current) {
                 clearInterval(marketStatusIntervalRef.current);
             }
         };
     }, [fetchMarketStatus]);
-    
+
     // Start data fetching based on mode
     useEffect(() => {
         if (!marketStatus) return;
-        
+
         if (mode === 'live') {
             // Start WebSocket connection
             connectWebSocket(symbol, expiry);
@@ -317,15 +327,15 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             // Use REST polling for snapshot/halted modes
             console.log(`📸 Using REST snapshot mode - Engine: ${marketStatus.engine_mode}`);
             pollMarketData();
-            
+
             // Set up polling interval (every 15 seconds for snapshot modes)
             pollIntervalRef.current = setInterval(() => {
-                if (mountedRef.current && mode !== 'live') {
+                if (mountedRef.current) {
                     pollMarketData();
                 }
             }, 15000);
         }
-        
+
         return () => {
             if (pollIntervalRef.current) {
                 clearInterval(pollIntervalRef.current);
@@ -334,8 +344,8 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
     }, [symbol, expiry, mode, marketStatus, connectWebSocket, pollMarketData]);
 
     // Effective spot price based on mode
-    const effectiveSpot = data && mode === 'live' 
-        ? data.spot 
+    const effectiveSpot = data && mode === 'live'
+        ? data.spot
         : data?.spot;
 
     return {

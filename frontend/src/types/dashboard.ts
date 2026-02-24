@@ -74,14 +74,18 @@ export interface OptionChainData {
     oi: number;
     ltp: number;
     iv: number;
-    open_interest?: number;  // Made optional since not always present
+    open_interest?: number;
+    change?: number;
+    volume?: number;
   }>;
   puts?: Array<{
     strike: number;
     oi: number;
     ltp: number;
     iv: number;
-    open_interest?: number;  // Made optional since not always present
+    open_interest?: number;
+    change?: number;
+    volume?: number;
   }>;
   top_strikes?: Array<{
     strike: number;

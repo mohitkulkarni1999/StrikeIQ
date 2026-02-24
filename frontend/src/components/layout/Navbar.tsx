@@ -2,12 +2,12 @@
 
 import React, { useState } from 'react';
 import { Wifi, WifiOff, Activity, ChevronDown } from 'lucide-react';
-import { useLiveMarketData } from '../../hooks/useLiveMarketData';
+import { useLiveMarketData } from '../../hooks/useLiveMarketDataEnhanced';
 import MarketStatusIndicator from '../MarketStatusIndicator';
 
 export default function Navbar() {
   const [symbol, setSymbol] = useState("NIFTY");
-  const { data, status, loading, error, mode } = useLiveMarketData(symbol, null);
+  const { mode } = useLiveMarketData(symbol, null);
 
   const getLiveStatusBadge = () => {
     if (mode === 'live') {

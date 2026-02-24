@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useReducer, useEffect, ReactNode } from 'react';
-import { DashboardResponse, isAuthRequired, AuthRequiredData, MarketData } from '../types/dashboard';
+import { DashboardResponse, isAuthRequired, AuthRequiredData, MarketData } from '@/types/dashboard';
 
 interface AuthState {
   isAuthenticated: boolean;
@@ -10,7 +10,7 @@ interface AuthState {
   loginUrl: string | null;
 }
 
-type AuthAction = 
+type AuthAction =
   | { type: 'AUTH_CHECK_START' }
   | { type: 'AUTH_CHECK_SUCCESS'; isAuthenticated: boolean }
   | { type: 'AUTH_CHECK_ERROR'; error: string }
@@ -30,7 +30,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
   switch (action.type) {
     case 'AUTH_CHECK_START':
       return { ...state, isLoading: true, error: null };
-    
+
     case 'AUTH_CHECK_SUCCESS':
       return {
         ...state,
@@ -39,7 +39,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         error: null,
         lastCheck: Date.now(),
       };
-    
+
     case 'AUTH_CHECK_ERROR':
       return {
         ...state,
@@ -48,7 +48,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         error: action.error,
         lastCheck: Date.now(),
       };
-    
+
     case 'AUTH_REQUIRED':
       return {
         ...state,
@@ -59,7 +59,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         mode: 'AUTH',
         loginUrl: action.payload.login_url,
       };
-    
+
     case 'AUTH_SUCCESS':
       return {
         ...state,
@@ -68,7 +68,7 @@ function authReducer(state: AuthState, action: AuthAction): AuthState {
         error: null,
         lastCheck: Date.now(),
       };
-    
+
     default:
       return state;
   }
@@ -93,11 +93,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const checkAuth = async () => {
     // Always check auth status, regardless of current state
     dispatch({ type: 'AUTH_CHECK_START' });
-    
+
     try {
       const response = await fetch('/api/dashboard/NIFTY');
+      if (!response.ok) {
+        throw new Error(`HTTP Error: ${response.status}`);
+      }
       const data: DashboardResponse = await response.json();
-      
+
       if (isAuthRequired(data)) {
         dispatch({ type: 'AUTH_REQUIRED', payload: { login_url: data.login_url } });
       } else {
@@ -113,7 +116,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (!state.isAuthenticated && !state.isLoading) {
       return; // Already in auth required state
     }
-    
+
     dispatch({ type: 'AUTH_REQUIRED', payload: { login_url: authData.login_url } });
     // Stop any polling here
     console.log('Authentication required, stopping polling');
@@ -122,7 +125,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Listen for auth status updates from polling
   useEffect(() => {
     console.log('🎧 AuthContext: Setting up event listeners');
-    
+
     const handleAuthRequired = (event: CustomEvent) => {
       console.log('🚫 AuthContext: Received authRequired event', event.detail);
       const { login_url } = event.detail;
@@ -137,7 +140,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
     window.addEventListener('authRequired', handleAuthRequired as EventListener);
     window.addEventListener('authSuccess', handleAuthSuccess);
 
-    console.log('✅ AuthContext: Event listeners set up');
+    // Initial auth check
+    checkAuth();
+
+    console.log('✅ AuthContext: Event listeners set up and initial check started');
 
     return () => {
       console.log('🧹 AuthContext: Cleaning up event listeners');

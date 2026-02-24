@@ -1,8 +1,9 @@
 import type { AppProps } from 'next/app';
 import { useEffect } from 'react';
-import { AuthProvider } from '../contexts/AuthContext';
-import Navbar from '../components/layout/Navbar';
-import '../styles/globals.css';
+import { AuthProvider } from '@/contexts/AuthContext';
+import Navbar from '@/components/layout/Navbar';
+import AppBootstrapGuard from '@/components/AppBootstrapGuard';
+import '@/styles/globals.css';
 
 function MyApp({ Component, pageProps }: AppProps) {
   useEffect(() => {
@@ -59,10 +60,12 @@ function MyApp({ Component, pageProps }: AppProps) {
 
   return (
     <AuthProvider>
-      <div className="min-h-screen bg-background text-text-primary">
-        <Navbar />
-        <Component {...pageProps} />
-      </div>
+      <AppBootstrapGuard>
+        <div className="min-h-screen bg-background text-text-primary">
+          <Navbar />
+          <Component {...pageProps} />
+        </div>
+      </AppBootstrapGuard>
     </AuthProvider>
   );
 }
