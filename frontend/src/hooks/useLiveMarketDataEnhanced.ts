@@ -155,13 +155,15 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             return;
         }
 
-        const url = expiry
-            ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
-            : `ws://localhost:8000/ws/live-options/${symbol}`;
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname;
+        const wsUrl = expiry
+            ? `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
+            : `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}`;
 
-        console.log("🔌 CONNECTING TO WebSocket:", url);
+        console.log("🔌 CONNECTING TO WebSocket:", wsUrl);
 
-        const ws = new WebSocket(url);
+        const ws = new WebSocket(wsUrl);
         wsRef.current = ws;
 
         ws.onopen = () => {

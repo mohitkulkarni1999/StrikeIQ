@@ -49,13 +49,12 @@ var __TURBOPACK__imported__module__$5b$externals$5d2f$react__$5b$external$5d$__$
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$router$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/next/router.js [ssr] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$head$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/next/head.js [ssr] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$contexts$2f$AuthContext$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/contexts/AuthContext.tsx [ssr] (ecmascript)");
+var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$core$2f$ws$2f$wsInitController$2e$ts__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/core/ws/wsInitController.ts [ssr] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$OAuthHandler$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/components/OAuthHandler.tsx [ssr] (ecmascript)");
-var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$api$2f$axios$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/api/axios.js [ssr] (ecmascript)");
 var __turbopack_async_dependencies__ = __turbopack_handle_async_dependencies__([
-    __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$contexts$2f$AuthContext$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__,
-    __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$api$2f$axios$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__
+    __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$contexts$2f$AuthContext$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__
 ]);
-[__TURBOPACK__imported__module__$5b$project$5d2f$src$2f$contexts$2f$AuthContext$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$api$2f$axios$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__] = __turbopack_async_dependencies__.then ? (await __turbopack_async_dependencies__)() : __turbopack_async_dependencies__;
+[__TURBOPACK__imported__module__$5b$project$5d2f$src$2f$contexts$2f$AuthContext$2e$tsx__$5b$ssr$5d$__$28$ecmascript$29$__] = __turbopack_async_dependencies__.then ? (await __turbopack_async_dependencies__)() : __turbopack_async_dependencies__;
 ;
 ;
 ;
@@ -77,18 +76,23 @@ function AuthSuccess() {
         // If auth successful, trigger WebSocket init and redirect
         if (isSuccess) {
             console.log('OAuth success detected, initializing WebSocket');
-            // Initialize WebSocket connection
+            // Initialize WebSocket connection using locked core module
             const initWebSocket = async ()=>{
                 try {
-                    console.log('Calling WS init API...');
-                    const response = await __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$api$2f$axios$2e$js__$5b$ssr$5d$__$28$ecmascript$29$__["default"].get('/api/ws/init');
-                    console.log('WS init successful:', response.data);
-                    // Trigger auth context refresh
-                    await checkAuth();
-                    // Redirect to dashboard after short delay
-                    setTimeout(()=>{
-                        router.push('/');
-                    }, 500);
+                    console.log('Calling locked WS init controller...');
+                    const initResult = await (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$core$2f$ws$2f$wsInitController$2e$ts__$5b$ssr$5d$__$28$ecmascript$29$__["initWebSocketOnce"])();
+                    if (initResult.status === 'success') {
+                        console.log('WS init successful:', initResult);
+                        // Trigger auth context refresh
+                        await checkAuth();
+                        // Redirect to dashboard after short delay
+                        setTimeout(()=>{
+                            router.push('/');
+                        }, 500);
+                    } else {
+                        console.error('WS init failed:', initResult.message);
+                        setStatus('error');
+                    }
                 } catch (error) {
                     console.error('WS init failed:', error);
                     setStatus('error');
@@ -108,7 +112,7 @@ function AuthSuccess() {
                         children: "Authentication Status - StrikeIQ"
                     }, void 0, false, {
                         fileName: "[project]/src/pages/auth/success.tsx",
-                        lineNumber: 54,
+                        lineNumber: 61,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("meta", {
@@ -116,13 +120,13 @@ function AuthSuccess() {
                         content: "Upstox authentication status"
                     }, void 0, false, {
                         fileName: "[project]/src/pages/auth/success.tsx",
-                        lineNumber: 55,
+                        lineNumber: 62,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/src/pages/auth/success.tsx",
-                lineNumber: 53,
+                lineNumber: 60,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("div", {
@@ -141,7 +145,7 @@ function AuthSuccess() {
                             }
                         }, void 0, false, {
                             fileName: "[project]/src/pages/auth/success.tsx",
-                            lineNumber: 60,
+                            lineNumber: 67,
                             columnNumber: 11
                         }, this),
                         status === 'success' ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["Fragment"], {
@@ -163,17 +167,17 @@ function AuthSuccess() {
                                                     d: "M5 13l4 4L19 7"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                                    lineNumber: 73,
+                                                    lineNumber: 80,
                                                     columnNumber: 21
                                                 }, this)
                                             }, void 0, false, {
                                                 fileName: "[project]/src/pages/auth/success.tsx",
-                                                lineNumber: 72,
+                                                lineNumber: 79,
                                                 columnNumber: 19
                                             }, this)
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 71,
+                                            lineNumber: 78,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("h1", {
@@ -181,7 +185,7 @@ function AuthSuccess() {
                                             children: "Authentication Successful!"
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 76,
+                                            lineNumber: 83,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("p", {
@@ -189,7 +193,7 @@ function AuthSuccess() {
                                             children: "Your Upstox account has been connected successfully"
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 77,
+                                            lineNumber: 84,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("p", {
@@ -197,20 +201,20 @@ function AuthSuccess() {
                                             children: "Redirecting to dashboard..."
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 78,
+                                            lineNumber: 85,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                    lineNumber: 70,
+                                    lineNumber: 77,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("div", {
                                     className: "animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"
                                 }, void 0, false, {
                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                    lineNumber: 81,
+                                    lineNumber: 88,
                                     columnNumber: 15
                                 }, this)
                             ]
@@ -233,17 +237,17 @@ function AuthSuccess() {
                                                     d: "M6 18L18 6M6 6l12 12"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                                    lineNumber: 88,
+                                                    lineNumber: 95,
                                                     columnNumber: 21
                                                 }, this)
                                             }, void 0, false, {
                                                 fileName: "[project]/src/pages/auth/success.tsx",
-                                                lineNumber: 87,
+                                                lineNumber: 94,
                                                 columnNumber: 19
                                             }, this)
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 86,
+                                            lineNumber: 93,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("h1", {
@@ -251,7 +255,7 @@ function AuthSuccess() {
                                             children: "Authentication Failed"
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 91,
+                                            lineNumber: 98,
                                             columnNumber: 17
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("p", {
@@ -259,13 +263,13 @@ function AuthSuccess() {
                                             children: "There was an issue connecting your Upstox account"
                                         }, void 0, false, {
                                             fileName: "[project]/src/pages/auth/success.tsx",
-                                            lineNumber: 92,
+                                            lineNumber: 99,
                                             columnNumber: 17
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                    lineNumber: 85,
+                                    lineNumber: 92,
                                     columnNumber: 15
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$externals$5d2f$react$2f$jsx$2d$dev$2d$runtime__$5b$external$5d$__$28$react$2f$jsx$2d$dev$2d$runtime$2c$__cjs$29$__["jsxDEV"])("button", {
@@ -274,7 +278,7 @@ function AuthSuccess() {
                                     children: "Try Again"
                                 }, void 0, false, {
                                     fileName: "[project]/src/pages/auth/success.tsx",
-                                    lineNumber: 95,
+                                    lineNumber: 102,
                                     columnNumber: 15
                                 }, this)
                             ]
@@ -282,12 +286,12 @@ function AuthSuccess() {
                     ]
                 }, void 0, true, {
                     fileName: "[project]/src/pages/auth/success.tsx",
-                    lineNumber: 59,
+                    lineNumber: 66,
                     columnNumber: 9
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/src/pages/auth/success.tsx",
-                lineNumber: 58,
+                lineNumber: 65,
                 columnNumber: 7
             }, this)
         ]

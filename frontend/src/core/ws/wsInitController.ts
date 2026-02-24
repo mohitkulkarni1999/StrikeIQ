@@ -16,7 +16,7 @@
  */
 
 interface WSInitResponse {
-  status: 'success' | 'error';
+  status: 'success' | 'error' | 'connected';
   message?: string;
   session_id?: string;
 }
@@ -28,7 +28,7 @@ interface WSInitResponse {
 export async function initWebSocketOnce(): Promise<WSInitResponse> {
   try {
     console.log('🔒 WS Init: Starting single WebSocket initialization');
-    
+
     const response = await fetch('/api/ws/init', {
       method: 'GET',
       credentials: 'include',
@@ -38,12 +38,24 @@ export async function initWebSocketOnce(): Promise<WSInitResponse> {
     });
 
     if (!response.ok) {
+      // 500 most commonly means the backend already has an active session
+      // (e.g. after a browser tab refresh the sessionStorage is cleared but
+      // the backend still holds the connection). Treat this as "already up".
+      if (response.status === 500 || response.status === 409) {
+        console.warn(
+          `🔒 WS Init: Backend returned ${response.status} — session likely already active, proceeding.`
+        );
+        markWSInitialized();
+        return { status: 'connected', message: 'Session already active on backend' };
+      }
+
+      // For real client errors (401, 403, 400...) fail fast so the user knows
       throw new Error(`WS Init failed: ${response.status} ${response.statusText}`);
     }
 
     const data: WSInitResponse = await response.json();
-    
-    if (data.status === 'success') {
+
+    if (data.status === 'success' || data.status === 'connected') {
       console.log('🔒 WS Init: Successfully initialized WebSocket session');
       return data;
     } else {
@@ -64,8 +76,8 @@ export async function initWebSocketOnce(): Promise<WSInitResponse> {
  */
 export function isWSInitialized(): boolean {
   // Check if WebSocket session exists in cookies/storage
-  return document.cookie.includes('ws_session=') || 
-         sessionStorage.getItem('ws_initialized') === 'true';
+  return document.cookie.includes('ws_session=') ||
+    sessionStorage.getItem('ws_initialized') === 'true';
 }
 
 /**
@@ -75,4 +87,13 @@ export function isWSInitialized(): boolean {
 export function markWSInitialized(): void {
   sessionStorage.setItem('ws_initialized', 'true');
   console.log('🔒 WS Init: Marked as initialized');
+}
+
+/**
+ * Clear the initialized flag so the next connect() attempt
+ * goes through the full init flow (used by the recovery poller)
+ */
+export function clearWSInitialized(): void {
+  sessionStorage.removeItem('ws_initialized');
+  console.log('🔒 WS Init: Cleared — will re-initialize on next connect');
 }

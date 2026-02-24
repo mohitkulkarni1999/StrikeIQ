@@ -11,7 +11,7 @@
   "static/chunks/node_modules_react-dom_8a8085df._.js",
   "static/chunks/node_modules_axios_lib_2c8bf6cb._.js",
   "static/chunks/node_modules_416396d1._.js",
-  "static/chunks/[root-of-the-server]__bc4511cf._.js"
+  "static/chunks/[root-of-the-server]__93ed1b09._.js"
 ],
     source: "entry"
 });

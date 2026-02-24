@@ -33,45 +33,43 @@ interface LiveOptionsWSOptions {
  * Enforces single connection pattern and prevents reconnection storms
  */
 export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
-  const { 
-    ws, 
-    isConnected, 
-    isInitializing, 
-    setWS, 
-    setConnected, 
-    setInitializing, 
-    setLastMessage, 
+  const {
+    ws,
+    isConnected,
+    isInitializing,
+    setWS,
+    setConnected,
+    setInitializing,
+    setLastMessage,
     setError,
     incrementReconnectAttempts,
     resetReconnectAttempts,
-    reconnectAttempts,
-    maxReconnectAttempts
   } = useWSStore();
 
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const mountedRef = useRef<boolean>(true);
+  // Keep a stable ref to options so connect() never needs to recreate
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
 
   // Calculate next Thursday expiry if not provided
   const getNextThursdayExpiry = useCallback(() => {
     const today = new Date();
-    const thursday = new Date(today);
     const daysUntilThursday = (4 - today.getDay() + 7) % 7 || 7;
+    const thursday = new Date(today);
     thursday.setDate(today.getDate() + daysUntilThursday);
     return thursday.toISOString().split('T')[0];
   }, []);
 
-  // Build WebSocket URL
-  const buildWSUrl = useCallback((symbol: string, expiry: string) => {
-    const finalExpiry = expiry || getNextThursdayExpiry();
-    return `ws://localhost:8000/ws/live-options/${symbol}?expiry=${encodeURIComponent(finalExpiry)}`;
-  }, [getNextThursdayExpiry]);
-
-  // Connect to WebSocket
+  // Stable connect — reads state directly from store, not from reactive deps
   const connect = useCallback(async () => {
     if (!mountedRef.current) return;
-    
+
+    // Read current state directly from store to avoid stale closures
+    const { isConnected: connected, isInitializing: initializing, reconnectAttempts, maxReconnectAttempts } = useWSStore.getState();
+
     // Prevent multiple connections
-    if (isConnected || isInitializing) {
+    if (connected || initializing) {
       console.log('🔒 WS: Already connected or initializing, skipping');
       return;
     }
@@ -80,48 +78,44 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
     if (!isWSInitialized()) {
       console.log('🔒 WS: Not initialized, calling init first');
       setInitializing(true);
-      
+
       const initResult = await initWebSocketOnce();
-      if (initResult.status !== 'success') {
+      if (initResult.status !== 'success' && initResult.status !== 'connected') {
         setError(initResult.message || 'WS initialization failed');
         setInitializing(false);
         return;
       }
-      
+
       markWSInitialized();
       setInitializing(false);
     }
 
-    // Create WebSocket connection
-    const wsUrl = buildWSUrl(options.symbol, options.expiry);
+    // Build WebSocket URL dynamically
+    const { symbol, expiry } = optionsRef.current;
+    const finalExpiry = expiry || getNextThursdayExpiry();
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const wsHost = window.location.hostname;
+    const wsUrl = `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}?expiry=${encodeURIComponent(finalExpiry)}`;
+
     console.log(`🔒 WS: Connecting to ${wsUrl}`);
-    
     const websocket = new WebSocket(wsUrl);
     setWS(websocket);
 
     websocket.onopen = () => {
       if (!mountedRef.current) return;
-      
       console.log('🔒 WS: Connected successfully');
       setConnected(true);
       setError(null);
       resetReconnectAttempts();
-      
-      if (options.onConnect) {
-        options.onConnect();
-      }
+      optionsRef.current.onConnect?.();
     };
 
     websocket.onmessage = (event) => {
       if (!mountedRef.current) return;
-      
       try {
         const data = JSON.parse(event.data);
         setLastMessage(data);
-        
-        if (options.onMessage) {
-          options.onMessage(data);
-        }
+        optionsRef.current.onMessage?.(data);
       } catch (error) {
         console.error('🔒 WS: Failed to parse message', error);
       }
@@ -129,72 +123,70 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
 
     websocket.onclose = (event) => {
       if (!mountedRef.current) return;
-      
       console.log(`🔒 WS: Closed - Code: ${event.code}, Reason: ${event.reason}`);
       setConnected(false);
       setWS(null);
-      
-      if (options.onDisconnect) {
-        options.onDisconnect();
-      }
+      optionsRef.current.onDisconnect?.();
 
-      // Attempt reconnection if not manual close and under max attempts
-      if (event.code !== 1000 && reconnectAttempts < maxReconnectAttempts) {
+      // Read fresh state for reconnect logic
+      const { reconnectAttempts: attempts, maxReconnectAttempts: maxAttempts } = useWSStore.getState();
+
+      // Code 1011 = Server Internal Error
+      // This usually means "market closed / backend has no data to serve right now".
+      // Use a much longer backoff (10s, 20s, 40s... max 60s) and cap at 3 retries
+      // to avoid flooding the backend during off-market hours.
+      const isServerError = event.code === 1011;
+      const maxRetries = isServerError ? 3 : maxAttempts;
+      const baseDelay = isServerError ? 10_000 : 1_000;
+
+      if (event.code !== 1000 && attempts < maxRetries) {
         incrementReconnectAttempts();
-        
-        const delay = Math.min(10000, 1000 * 2 ** reconnectAttempts);
-        console.log(`🔒 WS: Reconnecting in ${delay}ms (attempt ${reconnectAttempts + 1})`);
-        
+        const delay = Math.min(60_000, baseDelay * 2 ** attempts);
+        console.log(`🔒 WS: Reconnecting in ${delay}ms (attempt ${attempts + 1}${isServerError ? ', server-error backoff' : ''})`);
         reconnectTimeoutRef.current = setTimeout(() => {
-          if (mountedRef.current) {
-            connect();
-          }
+          if (mountedRef.current) connect();
         }, delay);
-      } else if (reconnectAttempts >= maxReconnectAttempts) {
-        setError('Max reconnection attempts reached. Please refresh the page.');
+      } else if (attempts >= maxRetries) {
+        console.warn(`🔒 WS: Max reconnection attempts (${maxRetries}) reached. Giving up.`);
+        setError(
+          isServerError
+            ? 'Market data unavailable — backend may be closed or market is not open.'
+            : 'Max reconnection attempts reached. Please refresh the page.'
+        );
       }
     };
 
     websocket.onerror = (error) => {
       if (!mountedRef.current) return;
-      
       console.error('🔒 WS: Connection error', error);
       setError('WebSocket connection error');
-      
-      if (options.onError) {
-        options.onError('WebSocket connection error');
-      }
+      optionsRef.current.onError?.('WebSocket connection error');
     };
-  }, [options, isConnected, isInitializing, buildWSUrl, isWSInitialized, setWS, setConnected, setInitializing, setLastMessage, setError, resetReconnectAttempts, incrementReconnectAttempts, reconnectAttempts, maxReconnectAttempts]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getNextThursdayExpiry, setWS, setConnected, setError, resetReconnectAttempts, setInitializing, incrementReconnectAttempts]); // stable — reads live store state via getState()
 
-  // Initialize connection on mount
+  // Run ONCE on mount only — no [connect, ws] dependency that causes re-runs
   useEffect(() => {
     mountedRef.current = true;
     connect();
 
     return () => {
       mountedRef.current = false;
-      
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      
-      if (ws) {
-        ws.close();
-      }
+      useWSStore.getState().ws?.close();
     };
-  }, [connect, ws]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // intentionally empty — connect once on mount
 
   // Manual disconnect function
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
     }
-    
-    if (ws) {
-      ws.close(1000, 'Manual disconnect');
-    }
-  }, [ws]);
+    useWSStore.getState().ws?.close(1000, 'Manual disconnect');
+  }, []);
 
   return {
     ws,

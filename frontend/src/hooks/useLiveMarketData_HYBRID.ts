@@ -69,9 +69,11 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
     const connectWebSocket = useCallback((symbol: string, expiry: string | null) => {
         if (!symbol) return;
 
+        const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const wsHost = window.location.hostname;
         const url = expiry
-            ? `ws://localhost:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
-            : `ws://localhost:8000/ws/live-options/${symbol}`;
+            ? `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}?expiry_date=${encodeURIComponent(expiry)}`
+            : `${wsProtocol}//${wsHost}:8000/ws/live-options/${symbol}`;
 
         console.log("🔗 CONNECTING TO WebSocket:", url);
 
