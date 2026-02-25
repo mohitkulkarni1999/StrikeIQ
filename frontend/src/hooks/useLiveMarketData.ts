@@ -106,6 +106,22 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
                 setLoading(false);
                 setError(null);
 
+            } else if (message.status === 'market_data' && message.data) {
+                // Handle the new market_data format from backend
+                const transformed: LiveMarketData = {
+                    ...message.data,
+                    symbol: message.data.symbol || symbol,
+                    spot: message.data.spot || 0,
+                    timestamp: message.data.timestamp || new Date().toISOString(),
+                    intelligence: message.data.intelligence || {},
+                    optionChain: message.data.option_chain || null,
+                    availableExpiries: message.data.available_expiries || [],
+                };
+                setData(prev => ({ ...prev, ...transformed }));
+                setMode('live');
+                setLoading(false);
+                setError(null);
+
             } else if (message.status === 'auth_required') {
                 setError('Authentication required'); setMode('error');
             } else if (message.status === 'auth_error') {

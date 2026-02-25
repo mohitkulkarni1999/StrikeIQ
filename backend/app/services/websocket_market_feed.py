@@ -15,14 +15,9 @@ from app.core.live_market_state import MarketStateManager
 logger = logging.getLogger(__name__)
 
 
-# =========================================================
-# 🔥 SHARED SINGLETON WEBSOCKET FEED
-# =========================================================
-
 class WebSocketMarketFeed:
 
     def __init__(self):
-
         self.auth_service = get_upstox_auth_service()
         self.session_manager = get_market_session_manager()
         self.market_state_manager = MarketStateManager()
@@ -39,12 +34,10 @@ class WebSocketMarketFeed:
 
 
     async def start(self):
-
         if self.running:
             return
 
         self.running = True
-
         success = await self.connect()
 
         if not success:
@@ -85,7 +78,6 @@ class WebSocketMarketFeed:
                 logger.error("No WS URL received")
                 return False
 
-            # 🔥 DISABLE AUTO PING
             self.websocket = await websockets.connect(
                 ws_url,
                 subprotocols=["json"],
@@ -145,10 +137,6 @@ class WebSocketMarketFeed:
         print("📡 SUBSCRIBED TO NIFTY & BANKNIFTY")
 
 
-    # =========================================================
-    # 🔥 HEARTBEAT FIX
-    # =========================================================
-
     async def _heartbeat(self):
         while self.running:
             try:
@@ -159,10 +147,6 @@ class WebSocketMarketFeed:
                 print("🔴 Heartbeat failed:", e)
             await asyncio.sleep(10)
 
-
-    # =========================================================
-    # 🔥 RECEIVE LOOP
-    # =========================================================
 
     async def _recv_loop(self):
 
@@ -178,17 +162,11 @@ class WebSocketMarketFeed:
                 await asyncio.sleep(1)
 
 
-    # =========================================================
-    # 🔥 PROCESS LOOP (THREAD SAFE)
-    # =========================================================
-
     async def _process_loop(self):
 
         while self.running:
             try:
                 raw = await self._message_queue.get()
-
-                # 🔥 MOVE PROTOBUF TO THREAD
                 parsed = await asyncio.to_thread(parse_upstox_feed, raw)
 
                 feeds = getattr(parsed, "feeds", None)
@@ -203,22 +181,24 @@ class WebSocketMarketFeed:
                         continue
 
                     ltp = getattr(feed.ltpc, "ltp", None)
-
                     if ltp is None:
                         continue
 
                     if "Nifty 50" in instrument_key:
                         self.market_state_manager.update_ltp("NIFTY", ltp)
+                        ws_feed_manager.market_state["NIFTY"] = ltp
+                        ws_feed_manager.market_states.update_ltp("NIFTY", ltp)
 
                     elif "Nifty Bank" in instrument_key:
                         self.market_state_manager.update_ltp("BANKNIFTY", ltp)
+                        ws_feed_manager.market_state["BANKNIFTY"] = ltp
+                        ws_feed_manager.market_states.update_ltp("BANKNIFTY", ltp)
 
             except Exception as e:
                 logger.error(f"Process error: {e}")
 
 
     async def disconnect(self):
-
         self.running = False
         self.is_connected = False
 
@@ -235,15 +215,22 @@ class WebSocketMarketFeed:
             await self.websocket.close()
 
 
-# =========================================================
-# 🔥 MANAGER
-# =========================================================
-
 class WebSocketFeedManager:
 
     def __init__(self):
+
         self.feed: Optional[WebSocketMarketFeed] = None
         self._lock = asyncio.Lock()
+
+        # AI Engine ke liye
+        self.market_state = {
+            "NIFTY": None,
+            "BANKNIFTY": None
+        }
+
+        # Structural Engine ke liye
+        self.market_states = MarketStateManager()
+
 
     async def start_feed(self):
 

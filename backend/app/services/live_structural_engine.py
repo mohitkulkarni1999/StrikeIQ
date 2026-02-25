@@ -9,7 +9,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import logging
-
+from ai.formula_integrator import store_formula_signal
+import asyncio
 from app.core.live_market_state import MarketStateManager
 from app.services.structural_alert_engine import StructuralAlertEngine
 from app.services.gamma_pressure_map import GammaPressureMapEngine
@@ -223,7 +224,32 @@ class LiveStructuralEngine:
         # NEW: 16. Compute Expiry Magnet Analysis
         expiry_magnet_analysis = self.expiry_magnet_engine.analyze_expiry_magnets(symbol, frontend_data)
         formatted_expiry_analysis = self.expiry_magnet_engine.format_for_frontend(expiry_magnet_analysis)
-        
+        # ================= AI LIVE SIGNAL INTEGRATION =================
+        try:
+            pcr = snapshot.get("pcr", 0)
+            call_oi = snapshot.get("total_oi_calls", 0)
+            put_oi = snapshot.get("total_oi_puts", 0)
+
+            # 🔥 F01: PCR Based Signal
+            if pcr > 1.2:
+                store_formula_signal("F01", "BUY", 0.75, spot)
+
+            elif pcr < 0.8:
+                store_formula_signal("F01", "SELL", 0.75, spot)
+
+            # 🔥 F02: OI Imbalance Signal
+            total = call_oi + put_oi
+            if total > 0:
+                imbalance = abs(call_oi - put_oi) / total
+
+                if imbalance > 0.3:
+                    direction = "BUY" if put_oi > call_oi else "SELL"
+                    store_formula_signal("F02", direction, 0.70, spot)
+
+        except Exception as e:
+            logger.error(f"AI Integration Error: {e}")
+        # =============================================================
+
         return LiveMetrics(
             symbol=symbol,
             spot=spot,

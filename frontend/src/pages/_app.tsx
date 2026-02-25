@@ -3,6 +3,7 @@ import { useEffect } from 'react';
 import { AuthProvider } from '@/contexts/AuthContext';
 import Navbar from '@/components/layout/Navbar';
 import AppBootstrapGuard from '@/components/AppBootstrapGuard';
+import WebSocketManager from '@/components/WebSocketManager';
 import '@/styles/globals.css';
 
 function MyApp({ Component, pageProps }: AppProps) {
@@ -24,37 +25,11 @@ function MyApp({ Component, pageProps }: AppProps) {
     // Add global event listener for auth expiry
     window.addEventListener("auth-expired", handleAuthExpired)
 
-    // 🔍 GLOBAL REST CALL INTERCEPTOR FOR AUDIT
-    const originalFetch = window.fetch;
-    window.fetch = async (...args) => {
-      console.log("🌐 REST CALL DETECTED:", args[0]);
-      console.log("🌐 REST METHOD:", args[1]?.method || 'GET');
-      console.log("🌐 REST TIMESTAMP:", new Date().toISOString());
-
-      const start = performance.now();
-      const response = await originalFetch(...args);
-      const duration = performance.now() - start;
-
-      console.log("🌐 REST STATUS:", response.status);
-      console.log("🌐 REST DURATION:", `${duration.toFixed(2)}ms`);
-
-      return response;
-    };
-
-    // 🔍 AXIOS INTERCEPTOR (if axios is used)
-    if (typeof window !== 'undefined' && (window as any).axios) {
-      (window as any).axios.interceptors.request.use((config: any) => {
-        console.log("🌐 AXIOS REST CALL:", config.url);
-        console.log("🌐 AXIOS METHOD:", config.method);
-        return config;
-      });
-    }
-
-    console.log("🔍 REST/WINDOW INTERCEPTORS INSTALLED");
+    console.log("🔍 AUTH EXPIRY LISTENER INSTALLED");
 
     // Cleanup on unmount
     return () => {
-      window.removeEventListener("auth-expired", handleAuthExpired)
+      window.removeEventListener("auth-expired", handleAuthExpired);
     }
   }, []);
 
@@ -63,6 +38,8 @@ function MyApp({ Component, pageProps }: AppProps) {
       <AppBootstrapGuard>
         <div className="min-h-screen bg-background text-text-primary">
           <Navbar />
+          {/* WebSocket Manager - ensures persistent connection */}
+          <WebSocketManager symbol="NIFTY" expiry="2026-02-26" />
           <Component {...pageProps} />
         </div>
       </AppBootstrapGuard>

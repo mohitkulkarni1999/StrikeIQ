@@ -10,6 +10,8 @@ from ...core.config import settings
 from .types import InstrumentInfo, APIResponseError, AuthenticationError, TokenExpiredError
 from app.utils.upstox_retry import retry_on_upstox_401
 from fastapi import HTTPException
+from app.services.upstox_auth_service import get_upstox_auth_service
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -309,11 +311,9 @@ class UpstoxClient:
             if not instruments_file.exists():
                 raise FileNotFoundError(f"Instruments file not found: {instruments_file}")
             
-            # Load instruments from file with format handling
             with open(instruments_file, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
             
-            # Handle different instruments.json formats
             if isinstance(raw, dict) and "instruments" in raw:
                 instruments = raw["instruments"]
             elif isinstance(raw, list):
@@ -321,33 +321,55 @@ class UpstoxClient:
             else:
                 raise ValueError("Invalid instruments.json format")
             
-            # Filter and transform instruments to builder contract format
             symbol_upper = symbol.upper()
             contracts = []
             
             for instrument in instruments:
-                # Add type guard
+                
                 if not isinstance(instrument, dict):
                     continue
                     
-                # Filter for NSE_FO options matching the symbol
                 if (
                     instrument.get("segment") == "NSE_FO" and
                     instrument.get("name") == symbol_upper and
                     instrument.get("instrument_type") in ["CE", "PE"]
                 ):
-                    # Validate required fields
+                    
                     required_fields = ["strike_price", "expiry", "instrument_key"]
                     if not all(field in instrument for field in required_fields):
                         continue
                     
-                    # Transform to builder contract format
+                    # 🔥🔥🔥 EXPIRY NORMALIZATION FIX 🔥🔥🔥
+                    expiry_raw = instrument.get("expiry")
+
+                    try:
+                        # Case 1: YYYYMMDD int (20260226)
+                        if isinstance(expiry_raw, int) and len(str(expiry_raw)) == 8:
+                            expiry = datetime.strptime(
+                                str(expiry_raw),
+                                "%Y%m%d"
+                            ).strftime("%Y-%m-%d")
+
+                        # Case 2: Epoch millis
+                        elif isinstance(expiry_raw, (int, float)) and expiry_raw > 10**12:
+                            expiry = datetime.fromtimestamp(
+                                expiry_raw / 1000
+                            ).strftime("%Y-%m-%d")
+
+                        # Case 3: Already correct
+                        else:
+                            expiry = str(expiry_raw)
+
+                    except Exception:
+                        continue
+
                     contract = {
                         "strike": float(instrument["strike_price"]),
                         "option_type": instrument["instrument_type"],
-                        "expiry": instrument["expiry"],
+                        "expiry": expiry,
                         "instrument_key": instrument["instrument_key"]
                     }
+                    
                     contracts.append(contract)
             
             logger.info(f"Transformed {len(contracts)} contracts for {symbol}")
@@ -629,6 +651,36 @@ class UpstoxClient:
                 status_code=500,
                 detail="Internal server error"
             )
+    async def get_ltp(self, instrument_key: str) -> Optional[float]:
+        """
+        Fetch latest LTP for index instrument (NIFTY / BANKNIFTY)
+        Used by LiveOptionChainBuilder REST fallback for ATM initialization
+        """
+        try:
+            auth_service = get_upstox_auth_service()
+            token = await auth_service.get_valid_access_token()
+
+            if not token:
+                logger.error("❌ No access token for LTP fetch")
+                return None
+
+            response = await self.get_market_quote(token, instrument_key)
+
+            if not response or "data" not in response:
+                logger.error(f"❌ Invalid LTP response for {instrument_key}")
+                return None
+
+            key = next(iter(response["data"]))
+            ltp = response["data"][key].get("last_price")
+
+            if ltp:
+                return float(ltp)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ LTP REST ERROR for {instrument_key}: {e}")
+            return None
 
     async def _log_final_response(self, response_data: Dict[str, Any]) -> None:
         """Log final backend response for forensic audit"""

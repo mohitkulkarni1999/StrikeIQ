@@ -22,6 +22,8 @@ interface WSStore {
   isConnected: boolean;
   isInitializing: boolean;
   lastMessage: any;
+  marketData: any;
+  liveData: null | any;
   error: string | null;
   reconnectAttempts: number;
   maxReconnectAttempts: number;
@@ -31,6 +33,8 @@ interface WSStore {
   setConnected: (connected: boolean) => void;
   setInitializing: (initializing: boolean) => void;
   setLastMessage: (message: any) => void;
+  setMarketData: (data: any) => void;
+  setLiveData: (data: any) => void;
   setError: (error: string | null) => void;
   incrementReconnectAttempts: () => void;
   resetReconnectAttempts: () => void;
@@ -41,6 +45,8 @@ export const useWSStore = create<WSStore>((set) => ({
   isConnected: false,
   isInitializing: false,
   lastMessage: null,
+  marketData: null,
+  liveData: null,
   error: null,
   reconnectAttempts: 0,
   maxReconnectAttempts: 5,
@@ -49,6 +55,8 @@ export const useWSStore = create<WSStore>((set) => ({
   setConnected: (isConnected) => set({ isConnected }),
   setInitializing: (isInitializing) => set({ isInitializing }),
   setLastMessage: (lastMessage) => set({ lastMessage }),
+  setMarketData: (marketData) => set({ marketData }),
+  setLiveData: (liveData) => set({ liveData }),
   setError: (error) => set({ error }),
   incrementReconnectAttempts: () => set((state) => ({ 
     reconnectAttempts: state.reconnectAttempts + 1 

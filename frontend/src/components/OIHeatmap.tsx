@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { BarChart3, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import api from '../lib/api';
+import { useWSStore } from '../core/ws/wsStore';
 
 interface OIData {
   strike: number;
@@ -26,6 +27,12 @@ export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
   const [loading, setLoading] = useState<boolean>(false);
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  
+  // Read from Zustand store
+  const { liveData: wsLiveData } = useWSStore();
+  
+  // Use WebSocket live data if available, otherwise fallback to prop
+  const actualLiveData = wsLiveData || liveData;
 
   const tableRef = useRef<HTMLDivElement>(null);
   const atmRowRef = useRef<HTMLTableRowElement>(null);
@@ -33,8 +40,10 @@ export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
 
   // DEBUG: Log props and structure
   console.log("OIHeatmap props:", { symbol, liveData });
-  console.log("LIVE DATA STRUCTURE:", liveData ? Object.keys(liveData) : 'null');
-  console.log("OPTION_CHAIN_SNAPSHOT:", liveData?.option_chain_snapshot);
+  console.log("WS LIVE DATA FROM STORE:", wsLiveData);
+  console.log("ACTUAL LIVE DATA:", actualLiveData);
+  console.log("LIVE DATA STRUCTURE:", actualLiveData ? Object.keys(actualLiveData) : 'null');
+  console.log("OPTION_CHAIN_SNAPSHOT:", actualLiveData?.option_chain_snapshot);
 
   // Reset scroll flag when symbol changes
   useEffect(() => {
@@ -43,44 +52,97 @@ export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
 
   // Process live data from WebSocket (includes chain snapshot)
   useEffect(() => {
-    if (liveData && liveData.calls && liveData.puts && Array.isArray(liveData.calls)) {
-      console.log("PROCESSING CALLS ARRAY, length:", liveData.calls.length);
-      console.log("FIRST CALL ROW:", liveData.calls[0]);
-      console.log("FIRST PUT ROW:", liveData.puts[0]);
+    if (actualLiveData && "calls" in actualLiveData && "puts" in actualLiveData && Array.isArray(actualLiveData.calls)) {
+      // Add console.log for WS payload verification
+      console.log("🔥 WS PAYLOAD VERIFICATION:", actualLiveData);
+      console.log("CALLS ARRAY:", actualLiveData.calls);
+      console.log("PUTS ARRAY:", actualLiveData.puts);
+      console.log("SPOT PRICE:", actualLiveData.spot_price);
+      console.log("ATM STRIKE:", actualLiveData.atm_strike);
+      console.log("TIMESTAMP:", actualLiveData._ts);
       
-      // Use spot price from live data
-      setSpotPrice(liveData.spot);
+      // Use spot price from live data (new field name)
+      setSpotPrice(actualLiveData.spot_price);
 
-      // Transform calls/puts data for heatmap
-      const transformedData = liveData.calls.map((call: any, index: number) => {
-        const put = liveData.puts[index] || {};
-        return {
-          strike: call.strike,
-          oi: call.oi || 0,
-          change: 0, // Not available in snapshot
-          ltp: call.ltp || 0,
-          volume: 0, // Not available in snapshot
-          iv: call.iv || 0,
-          put_oi: put.oi || 0,
-          put_change: 0,
-          put_ltp: put.ltp || 0,
-          put_volume: 0,
-          put_iv: put.iv || 0,
+      // Build unified strike map by merging calls and puts
+      const strikeMap: { [key: number]: { call_oi: number; put_oi: number; call_ltp: number; put_ltp: number; call_volume: number; put_volume: number } } = {};
+      
+      // Process calls
+      actualLiveData.calls.forEach((call: any) => {
+        strikeMap[call.strike] = {
+          call_oi: call.oi || 0,
+          put_oi: 0,
+          call_ltp: call.ltp || 0,
+          put_ltp: 0,
+          call_volume: call.volume || 0,
+          put_volume: 0
         };
       });
+      
+      // Process puts and merge with existing strikes
+      actualLiveData.puts.forEach((put: any) => {
+        if (strikeMap[put.strike]) {
+          // Merge with existing call data
+          strikeMap[put.strike].put_oi = put.oi || 0;
+          strikeMap[put.strike].put_ltp = put.ltp || 0;
+          strikeMap[put.strike].put_volume = put.volume || 0;
+        } else {
+          // Add new put-only strike
+          strikeMap[put.strike] = {
+            call_oi: 0,
+            put_oi: put.oi || 0,
+            call_ltp: 0,
+            put_ltp: put.ltp || 0,
+            call_volume: 0,
+            put_volume: put.volume || 0
+          };
+        }
+      });
 
-      console.log("TRANSFORMED DATA:", transformedData[0]);
-      setOiData(transformedData);
+      // Convert strike map to array format for rendering
+      const transformedData = Object.entries(strikeMap).map(([strike, data]) => ({
+        strike: parseInt(strike),
+        oi: data.call_oi,
+        change: 0, // Not available in snapshot
+        ltp: data.call_ltp,
+        volume: data.call_volume,
+        iv: 0, // Not available in snapshot
+        put_oi: data.put_oi,
+        put_change: 0,
+        put_ltp: data.put_ltp,
+        put_volume: data.put_volume,
+        put_iv: 0,
+      }));
+
+      // Sort by strike for proper ordering
+      transformedData.sort((a, b) => a.strike - b.strike);
+
+      // Filter to ATM window (±500 strikes) - DO NOT filter by OI
+      const filteredData = transformedData.filter(row => {
+        const diff = Math.abs(row.strike - actualLiveData.atm_strike);
+        return diff <= 500;   // keep ±500 window
+      });
+
+      console.log("UNIFIED STRIKE MAP:", strikeMap);
+      console.log("TOTAL STRIKES:", transformedData.length, "→ FILTERED TO:", filteredData.length);
+      console.log("SETTING OI DATA WITH:", filteredData.length, "ROWS");
+      console.log("SAMPLE DATA:", filteredData.slice(0, 3));
+      setOiData(filteredData);
       setLoading(false);
       setError(null);
     } else {
       console.log("NO VALID CALLS/PUTS DATA");
-      console.log("liveData exists:", !!liveData);
-      console.log("calls exists:", !!liveData?.calls);
-      console.log("puts exists:", !!liveData?.puts);
-      console.log("calls is array:", Array.isArray(liveData?.calls));
+      console.log("actualLiveData exists:", !!actualLiveData);
+      console.log("calls exists:", !!actualLiveData?.calls);
+      console.log("puts exists:", !!actualLiveData?.puts);
+      console.log("calls is array:", Array.isArray(actualLiveData?.calls));
     }
-  }, [liveData]);
+  }, [actualLiveData]);
+
+  // Debug render logging
+  useEffect(() => {
+    console.log("🎯 RENDERING OI DATA:", oiData.length, "ROWS");
+  }, [oiData]);
 
   if (loading && oiData.length === 0) {
     return (
@@ -167,7 +229,7 @@ export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
             <tbody className="divide-y divide-white/5">
               {oiData.map((row) => {
                 // Use backend ATM calculation instead of frontend derivation
-                const isATM = liveData?.current_atm_strike && Math.abs(row.strike - liveData.current_atm_strike) <= 1;
+                const isATM = actualLiveData?.atm_strike && Math.abs(row.strike - actualLiveData.atm_strike) <= 1;
 
                 return (
                   <tr

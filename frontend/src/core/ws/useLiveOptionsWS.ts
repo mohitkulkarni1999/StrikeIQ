@@ -41,6 +41,7 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
     setConnected,
     setInitializing,
     setLastMessage,
+    setMarketData,
     setError,
     incrementReconnectAttempts,
     resetReconnectAttempts,
@@ -115,6 +116,12 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
       try {
         const data = JSON.parse(event.data);
         setLastMessage(data);
+        
+        // Store market_data in Zustand store
+        if (data.status === 'market_data' && data.data) {
+          setMarketData(data.data);
+        }
+        
         optionsRef.current.onMessage?.(data);
       } catch (error) {
         console.error('🔒 WS: Failed to parse message', error);
@@ -163,7 +170,7 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
       optionsRef.current.onError?.('WebSocket connection error');
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [getNextThursdayExpiry, setWS, setConnected, setError, resetReconnectAttempts, setInitializing, incrementReconnectAttempts]); // stable — reads live store state via getState()
+  }, [getNextThursdayExpiry, setWS, setConnected, setError, resetReconnectAttempts, setInitializing, incrementReconnectAttempts, setMarketData]); // stable — reads live store state via getState()
 
   // Run ONCE on mount only — no [connect, ws] dependency that causes re-runs
   useEffect(() => {
@@ -175,7 +182,8 @@ export function useLiveOptionsWS(options: LiveOptionsWSOptions) {
       if (reconnectTimeoutRef.current) {
         clearTimeout(reconnectTimeoutRef.current);
       }
-      useWSStore.getState().ws?.close();
+      // DO NOT close WebSocket here - keep connection alive
+      // useWSStore.getState().ws?.close();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // intentionally empty — connect once on mount

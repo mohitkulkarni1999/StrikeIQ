@@ -18,6 +18,14 @@ const SafeModeGuard: React.FC<SafeModeGuardProps> = ({
     fallback = null 
 }) => {
     
+    // STALE WS DATA PREVENTION GUARD
+    if (engineMode === "SNAPSHOT" && dataSource === "rest_snapshot") {
+        console.log("🛡️ SafeModeGuard: Using snapshot mode - preventing stale WS data");
+        
+        // Children can render but should use REST data only
+        return <>{children}</>;
+    }
+    
     // ENGINE MODE UI VALIDATION GUARD
     if (engineMode !== "LIVE") {
         // Disable live animations and WS-dependent components
@@ -33,14 +41,6 @@ const SafeModeGuard: React.FC<SafeModeGuardProps> = ({
                 {children}
             </div>
         );
-    }
-    
-    // STALE WS DATA PREVENTION GUARD
-    if (engineMode === "SNAPSHOT" && dataSource === "rest_snapshot") {
-        console.log("🛡️ SafeModeGuard: Using snapshot mode - preventing stale WS data");
-        
-        // Children can render but should use REST data only
-        return <>{children}</>;
     }
     
     // LIVE MODE - Full functionality
@@ -62,12 +62,32 @@ export const useModeGuard = (engineMode: string, requiredMode: 'LIVE' | 'SNAPSHO
 export const useEffectiveSpot = (data: any, engineMode: string) => {
     if (!data) return 0;
     
-    // STALE WS DATA PREVENTION
-    const effectiveSpot = engineMode === "LIVE"
-        ? data.ws_tick_price || data.spot
-        : data.rest_spot_price || data.spot;
+    // PRIORITY ORDER: WS spot_price → REST fallback → 0
+    // Handle multiple possible data structures
+    const wsSpotPrice = data?.wsLiveData?.spot_price || 
+                       data?.spot_price || 
+                       data?.optionChain?.spot_price ||
+                       data?.liveData?.spot_price;
     
-    console.log(`🎯 Effective spot: ${effectiveSpot} (Mode: ${engineMode}, Source: ${engineMode === 'LIVE' ? 'WS' : 'REST'})`);
+    const restSpotPrice = data?.rest_spot_price || 
+                         data?.spot || 
+                         data?.optionChain?.spot;
+    
+    const effectiveSpot = wsSpotPrice || restSpotPrice || 0;
+    
+    // Determine source for logging
+    let source = 'UNKNOWN';
+    if (wsSpotPrice) source = 'WS';
+    else if (restSpotPrice) source = 'REST';
+    else source = 'DEFAULT';
+    
+    console.log(`🎯 Effective spot: ${effectiveSpot} (Mode: ${engineMode}, Source: ${source})`);
+    console.log(`🔍 Data structure check:`, {
+        wsLiveData: data?.wsLiveData,
+        spot_price: data?.spot_price,
+        optionChain: data?.optionChain,
+        liveData: data?.liveData
+    });
     
     return effectiveSpot;
 };

@@ -20,6 +20,10 @@ from app.core.live_market_state import MarketStateManager
 from app.services.market_session_manager import get_market_session_manager
 from fastapi import HTTPException
 import httpx
+from datetime import datetime, timezone
+from app.core.ws_manager import manager
+from app.models.live_chain_state import LiveChainState
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -155,19 +159,30 @@ class LiveChainState:
         strike_diff = abs(new_atm_strike - self.current_atm_strike)
         return strike_diff >= (2 * self.strike_step)
     
-    def get_active_instrument_keys(self, strikes: List[float]) -> Set[str]:
-        """Get instrument keys for selected strikes only"""
-        active_keys = set()
-        
+    def get_active_instrument_keys(self, strikes):
+
+        keys = set()
+
         for strike in strikes:
-            if strike in self.strike_map:
-                strike_data = self.strike_map[strike]
-                if "CE" in strike_data and isinstance(strike_data["CE"], dict):
-                    active_keys.add(strike_data["CE"]["instrument_key"])
-                if "PE" in strike_data and isinstance(strike_data["PE"], dict):
-                    active_keys.add(strike_data["PE"]["instrument_key"])
-        
-        return active_keys
+
+            pair = self.strike_map.get(strike)
+
+            if not pair:
+                continue
+
+            if not isinstance(pair, dict):
+                continue
+
+            ce_key = pair.get("CE")
+            pe_key = pair.get("PE")
+
+            if ce_key:
+                keys.add(ce_key)
+
+            if pe_key:
+                keys.add(pe_key)
+
+        return keys
     
     def build_final_chain(self) -> Dict[str, Any]:
         """Build final option chain for frontend"""
@@ -232,7 +247,7 @@ class LiveOptionChainBuilder:
         self.client = UpstoxClient()  # Use singleton without parameters
         self.market_state = MarketStateManager()
         self.session_manager = get_market_session_manager()
-        
+        self.oi_data = {}
         # WS-scoped state management
         self.chain_states: Dict[str, LiveChainState] = {}  # symbol -> LiveChainState
         self.option_chain_states = self.chain_states       # REQUIRED ALIAS for state access
@@ -251,8 +266,11 @@ class LiveOptionChainBuilder:
         self._instrument_lookup = {}
         self._instrument_reverse_lookup = {}
         
+        # Multi-expiry initialization tracking
+        self.initialized_chains: Dict[str, bool] = {}  # symbol:expiry -> initialized flag
+        
         # Load cached instruments at startup
-        self._load_cached_instruments()
+       
 
     async def start(self, expiry: Optional[str] = None) -> None:
         """
@@ -283,7 +301,31 @@ class LiveOptionChainBuilder:
         Resolve tradingsymbol from numeric instrument_key
         """
         return self._instrument_reverse_lookup.get(instrument_key)
+    def _get_nearest_monthly_future(self, symbol: str, opt_expiry: str):
+        futs = self.futidx_map.get(symbol, {})
 
+        if not futs:
+            raise Exception(f"No FUTIDX instruments found for {symbol}")
+
+        opt_date = datetime.strptime(opt_expiry, "%Y-%m-%d")
+
+        valid_futures = []
+
+        for fut_expiry, inst in futs.items():
+            fut_date = datetime.strptime(fut_expiry, "%Y-%m-%d")
+            if fut_date >= opt_date:
+                valid_futures.append((fut_date, inst))
+
+        if not valid_futures:
+            raise Exception(f"No valid FUTIDX available for {symbol}")
+
+        valid_futures.sort(key=lambda x: x[0])
+
+        nearest_expiry = valid_futures[0][0].strftime("%Y-%m-%d")
+        print(f"🟢 Using nearest FUTIDX expiry: {nearest_expiry}")
+
+        return valid_futures[0][1]
+    
     async def ensure_instruments_loaded(self) -> None:
         """
         Public async method to ensure instruments are loaded (from cache or CDN)
@@ -299,143 +341,146 @@ class LiveOptionChainBuilder:
             await self._fetch_instruments_from_cdn()
     
     def _load_cached_instruments(self) -> None:
-        """
-        Load cached instruments from local file
-        """
         if self._instruments_loaded:
             return
-        
+    
         try:
             instruments_file = Path("data/instruments.json")
-            
+        
             if not instruments_file.exists():
-                logger.warning("Cached instruments file not found at data/instruments.json")
-                logger.warning("Please run: python scripts/fetch_instruments.py")
+                logger.warning("Cached instruments file not found")
                 self._cached_instruments = []
-                self._instruments_loaded = True
+                self._instruments_loaded = False
                 return
-            
-            with open(instruments_file, 'r') as f:
-                cache_data = json.load(f)
-            
-            self._cached_instruments = cache_data.get("instruments", [])
-            
-            # Populate lookup map for fast resolution
+        
+            with open(instruments_file, 'r', encoding='utf-8') as f:
+                raw = json.load(f)
+        
+            if isinstance(raw, dict) and "instruments" in raw:
+                instruments = raw["instruments"]
+            elif isinstance(raw, list):
+                instruments = raw
+            else:
+                raise ValueError("Invalid instruments.json format")
+        
+            self._cached_instruments = instruments
+        
             self._instrument_lookup = {
                 inst.get("tradingsymbol"): inst.get("instrument_key")
                 for inst in self._cached_instruments
-                if inst.get("tradingsymbol") and inst.get("instrument_key")
+                if isinstance(inst, dict)
+                and inst.get("tradingsymbol")
+                and inst.get("instrument_key")
             }
+        
             self._instrument_reverse_lookup = {
                 inst.get("instrument_key"): inst.get("tradingsymbol")
                 for inst in self._cached_instruments
-                if inst.get("tradingsymbol") and inst.get("instrument_key")
+                if isinstance(inst, dict)
+                and inst.get("tradingsymbol")
+                and inst.get("instrument_key")
             }
-            
-            timestamp = cache_data.get("timestamp")
-            count = cache_data.get("count", 0)
-            
+        
             self._instruments_loaded = True
-            logger.info(f"Loaded {count} cached instruments (timestamp: {timestamp}) and built lookup maps")
-            
+            logger.info(f"Loaded {len(self._cached_instruments)} instruments successfully")
+        
         except Exception as e:
             logger.error(f"Failed to load cached instruments: {e}")
-
-    async def _fetch_instruments_from_cdn(self) -> None:
-        """
-        Fallback: Download instrument master from Upstox CDN
-        """
-        try:
-            cdn_url = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
-            logger.info(f"Fetching instruments from CDN: {cdn_url}")
-            
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.get(cdn_url)
-                
-                if response.status_code != 200:
-                    logger.error(f"Failed to fetch from CDN: status {response.status_code}")
-                    return
-                
-                # Decompress in-memory
-                with gzip.GzipFile(fileobj=io.BytesIO(response.content)) as f:
-                    all_instruments = json.load(f)
-            
-            logger.info(f"Downloaded {len(all_instruments)} total NSE instruments. Filtering...")
-            
-            # Filter for FO NIFTY/BANKNIFTY CE/PE
-            fo_instruments = [
-                inst for inst in all_instruments
-                if inst.get("segment") == "NSE_FO" and 
-                inst.get("instrument_type") in ["CE", "PE"] and
-                inst.get("name") in ["NIFTY", "BANKNIFTY"]
-            ]
-            
-            self._cached_instruments = fo_instruments
-            
-            # Rebuild maps
-            self._instrument_lookup = {
-                inst.get("tradingsymbol"): inst.get("instrument_key")
-                for inst in self._cached_instruments
-            }
-            self._instrument_reverse_lookup = {
-                inst.get("instrument_key"): inst.get("tradingsymbol")
-                for inst in self._cached_instruments
-            }
-            
-            # Save to local cache for next time
-            data_dir = Path("data")
-            data_dir.mkdir(exist_ok=True)
-            instruments_file = data_dir / "instruments.json"
-            
-            cache_data = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "count": len(self._cached_instruments),
-                "instruments": self._cached_instruments
-            }
-            
-            with open(instruments_file, 'w') as f:
-                json.dump(cache_data, f, indent=2)
-            
-            self._instruments_loaded = True
-            logger.info(f"Runtime instruments loaded from Upstox CDN: {len(self._cached_instruments)} matched")
-            
-        except Exception as e:
-            logger.error(f"Critical failure in runtime instrument loader: {e}")
-            # Ensure we don't keep trying forever
-            self._instruments_loaded = True 
             self._cached_instruments = []
+            self._instruments_loaded = False
+
+    
         
-    async def initialize_chain(self, symbol: str, expiry: str, attempt: int = 0) -> LiveChainState:
-        """
-        Initialize option chain structure for a symbol and expiry
-        """
-        logger.info(f"Initializing option chain for {symbol} expiry {expiry} (attempt {attempt})")
-        
-        # Guard against infinite recursion
-        if attempt >= MAX_EXPIRY_FALLBACK:
-            logger.error(f"Max expiry fallback ({MAX_EXPIRY_FALLBACK}) reached for {symbol}")
-            raise HTTPException(status_code=404, detail="No valid option chain available")
-        
+    async def initialize_chain(self, symbol: str, expiry: str, registry, attempt: int = 0) -> LiveChainState:
+        import asyncio
+
+        key = f"{symbol}:{expiry}"
+
+        if key in self.initialized_chains:
+            return self.chain_states.get(symbol)
+
+        retry = 0
+        while not registry._loaded.is_set():
+            if retry >= 10:
+                raise Exception("Instrument store not ready after 5 seconds")
+            await asyncio.sleep(0.5)
+            retry += 1
+
+        logger.info(f"🚀 Initializing option chain for {symbol}:{expiry}")
+
         try:
-            # Get access token
+            # 🔥 WAIT UNTIL CDN REGISTRY READY
+            await registry.wait_until_ready()
+
             token = await self.auth_service.get_valid_access_token()
+
             if not token:
-                raise HTTPException(status_code=401, detail="Authentication required")
-            
-            # Fetch option contracts first, then build chain dynamically
-            chain_state = await self._initialize_from_contracts(symbol, expiry)
-            
+                logger.warning("Auth token missing → returning empty chain")
+                chain = LiveChainState(symbol=symbol, expiry=expiry)
+                self.chain_states[symbol] = chain
+                return chain
+
+            # 🔥 BUILD STRIKE MAP FROM REGISTRY (NOT LOCAL JSON)
+            expiry_map = registry.options.get(symbol)
+
+            if not expiry_map:
+                raise RuntimeError(f"No option instruments for {symbol}")
+
+            if expiry not in expiry_map:
+                nearest = sorted(expiry_map.keys())[0]
+                logger.warning(f"Requested expiry {expiry} not found")
+                logger.warning(f"Using nearest expiry {nearest}")
+                expiry = nearest
+
+            strike_map = expiry_map[expiry]
+
+            chain_state = LiveChainState(
+                symbol=symbol,
+                expiry=expiry,
+                strike_map=strike_map
+            )
+
             self.chain_states[symbol] = chain_state
-            logger.info(f"Initialized chain for {symbol}: {len(chain_state.strike_map)} strikes")
-            
-            # Start periodic OI updates
-            await self._start_oi_updates(symbol)
-            
-            # Start batch compute loop for optimized processing
-            await self._start_batch_compute(symbol)
-            
+
+            # 🔥 FUTIDX MUST EXIST BEFORE OI LOOP
+            # 🔥 FUTIDX MUST EXIST BEFORE OI LOOP
+            fut_map = registry.futidx.get(symbol)
+
+            if not fut_map:
+                raise RuntimeError(f"No FUTIDX MAP for {symbol}")
+
+            target_expiry = chain_state.expiry
+
+            # agar exact FUT expiry nahi mila
+            opt_date = datetime.strptime(target_expiry, "%Y-%m-%d")
+
+            valid_futures = []
+
+            for fut_expiry, inst in fut_map.items():
+                fut_date = datetime.strptime(fut_expiry, "%Y-%m-%d")
+                
+                # 👇 FUT MUST BE SAME OR AFTER OPTION EXPIRY
+                if fut_date >= opt_date:
+                    valid_futures.append((fut_date, inst))
+
+            if not valid_futures:
+                raise RuntimeError(f"No valid FUTIDX available for {symbol}")
+
+            valid_futures.sort(key=lambda x: x[0])
+
+            nearest_expiry = valid_futures[0][0].strftime("%Y-%m-%d")
+            logger.info(f"🟢 Using nearest MONTHLY FUTIDX expiry {nearest_expiry}")
+
+            chain_state.fut_key = valid_futures[0][1]
+
+            # Mark this symbol:expiry combination as successfully initialized
+            self.initialized_chains[key] = True
+            logger.info(f"🔥 ATM ladder built for {symbol}:{expiry}")
+
+            await self._start_oi_updates(symbol, expiry, registry)
+            await self._start_batch_compute(symbol, expiry, registry)
             return chain_state
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize chain for {symbol}: {e}")
             raise
@@ -474,48 +519,105 @@ class LiveOptionChainBuilder:
         """
         Initialize option chain by fetching contracts first
         """
+
         try:
-            # Get access token
+
             token = await self.auth_service.get_valid_access_token()
             if not token:
                 raise HTTPException(status_code=401, detail="Authentication required")
-            
-            # Get index key for contracts
-            index_key = self._get_index_instrument_key(symbol)
-            
-            # Fetch option contracts
-            response = await self.client.get_option_contracts(token, symbol)
-            if not isinstance(response, dict) or "data" not in response:
-                raise HTTPException(status_code=500, detail="Invalid contracts response")
-            
-            contracts = response["data"]
-            if not contracts:
-                raise HTTPException(status_code=404, detail="No option contracts available")
-            
-            # Filter contracts by expiry
+
+            # 🟢 IMPORTANT FIX
+            contracts = await self.client.get_option_contracts(token, symbol)
+
+            if not contracts or not isinstance(contracts, list):
+                logger.error(f"Invalid contracts response for {symbol}")
+                return LiveChainState(symbol=symbol, expiry=expiry)
+
+            # Get all available expiries
+            available_expiries = sorted(
+                list(set(c.get("expiry") for c in contracts if c.get("expiry")))
+            )
+
+            if not available_expiries:
+                logger.error(f"No expiries available for {symbol}")
+                return LiveChainState(symbol=symbol, expiry=expiry)
+
+            # If requested expiry not present → fallback to nearest
+            if expiry not in available_expiries:
+
+                logger.warning(f"Requested expiry {expiry} not found")
+
+                from datetime import datetime
+
+                req = datetime.strptime(expiry, "%Y-%m-%d")
+
+                nearest = min(
+                    available_expiries,
+                    key=lambda e: abs(datetime.strptime(e, "%Y-%m-%d") - req)
+                )
+
+                logger.warning(f"Using nearest expiry {nearest}")
+
+                expiry = nearest
+
+            # Normalize expiries to string
+            available_expiries = sorted(
+                list(
+                    set(
+                        str(c.get("expiry"))
+                        for c in contracts
+                        if c.get("expiry")
+                    )
+                )
+            )
+
+            if not available_expiries:
+                logger.error(f"No expiries available for {symbol}")
+                return LiveChainState(symbol=symbol, expiry=expiry)
+
+            expiry = str(expiry)
+
+            if expiry not in available_expiries:
+
+                logger.warning(f"Requested expiry {expiry} not found")
+
+                try:
+                    req = datetime.strptime(expiry, "%Y-%m-%d")
+
+                    nearest = min(
+                        available_expiries,
+                        key=lambda e: abs(
+                            datetime.strptime(str(e), "%Y-%m-%d") - req
+                        )
+                    )
+
+                    logger.warning(f"Using nearest expiry {nearest}")
+                    expiry = nearest
+
+                except Exception as e:
+                    logger.error(f"Expiry fallback parsing failed: {e}")
+                    expiry = available_expiries[0]
+
             filtered_contracts = [
-                contract for contract in contracts
-                if contract.get("expiry") == expiry
+                c for c in contracts
+                if str(c.get("expiry")) == expiry
             ]
-            
-            if not filtered_contracts:
-                logger.info(f"No contracts found for {symbol} expiry {expiry}, attempting fallback")
-                return await self._handle_expiry_fallback(symbol, expiry, 1)
-            
-            # Create strike map and reverse map from contracts
+
             strike_map = {}
             reverse_map = {}
-            
+
+            # 🟢 IMPORTANT FIX: USE TRANSFORMED FIELDS
             for contract in filtered_contracts:
-                strike = contract.get("strike_price")
+
+                strike = contract.get("strike")
                 instrument_key = contract.get("instrument_key")
-                option_type = contract.get("instrument_type", "").upper()  # CE or PE
-                
+                option_type = contract.get("option_type", "").upper()
+
                 if strike and instrument_key and option_type in ["CE", "PE"]:
+
                     if strike not in strike_map:
                         strike_map[strike] = {}
-                    
-                    # Initialize with empty data - will be populated by WS ticks
+
                     strike_map[strike][option_type] = {
                         "instrument_key": instrument_key,
                         "ltp": 0,
@@ -523,19 +625,18 @@ class LiveOptionChainBuilder:
                         "volume": 0,
                         "prev_oi": 0
                     }
-                    
+
                     reverse_map[instrument_key] = (strike, option_type)
-            
+
             logger.info(f"Created strike map from {len(filtered_contracts)} contracts for {symbol}")
-            
-            # Create live chain state
+
             return LiveChainState(
                 symbol=symbol,
                 expiry=expiry,
                 strike_map=strike_map,
                 reverse_map=reverse_map
             )
-            
+
         except Exception as e:
             logger.error(f"Failed to initialize from contracts for {symbol}: {e}")
             raise
@@ -622,13 +723,9 @@ class LiveOptionChainBuilder:
                 
                 # Determine index key based on symbol
                 index_key = "NSE_INDEX|Nifty 50" if symbol == "NIFTY" else "NSE_INDEX|Nifty Bank"
-                resp = await client.get_ltp(index_key)
-                
-                if resp and resp.get("data"):
-                    key = next(iter(resp["data"]))
-                    spot = resp["data"][key]["last_price"]
-                    
-                    # Update chain state with REST spot price
+                spot = await client.get_ltp(index_key)
+
+                if spot:
                     chain_state.spot_price = float(spot)
                     logger.warning(f"REST FALLBACK SPOT USED for {symbol} → {spot}")
                 
@@ -771,17 +868,52 @@ class LiveOptionChainBuilder:
             
             logger.info(f"Initialized {symbol} ATM window: ATM={atm_strike}, strikes={len(window_strikes)}, instruments={len(active_keys)}")
     
-    async def _start_oi_updates(self, symbol: str) -> None:
+    async def _start_oi_updates(self, symbol: str, expiry: str, registry) -> None:
         """
         Start periodic OI updates from REST API
         """
-        if symbol in self.oi_update_tasks:
+        key = f"{symbol}:{expiry}"
+        if key in self.oi_update_tasks:
             return  # Already running
         
         # Create and start OI update task
-        task = asyncio.create_task(self._oi_update_loop(symbol))
-        self.oi_update_tasks[symbol] = task
-        logger.info(f"Started OI updates for {symbol}")
+        task = asyncio.create_task(self._oi_update_loop(symbol, expiry, registry))
+        self.oi_update_tasks[key] = task
+        logger.debug(f"Started OI updates for {symbol}:{expiry}")
+    
+    async def _safe_cancel(self, task):
+        """
+        Safely cancel a task without blocking the caller
+        """
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+    async def stop_tasks(self, symbol: str, expiry: str) -> None:
+        """
+        Stop background tasks for specific symbol+expiry combination
+        Called when WebSocket disconnects to prevent zombie tasks
+        Uses non-blocking cancellation to prevent ASGI blocking
+        """
+        key = f"{symbol}:{expiry}"
+
+        # Stop OI update task (non-blocking)
+        if key in self.oi_update_tasks:
+            task = self.oi_update_tasks[key]
+            asyncio.create_task(self._safe_cancel(task))
+            del self.oi_update_tasks[key]
+            logger.debug(f"Stopped OI update task for {key}")
+
+        # Stop batch compute task (non-blocking)
+        if key in self._batch_compute_tasks:
+            task = self._batch_compute_tasks[key]
+            asyncio.create_task(self._safe_cancel(task))
+            del self._batch_compute_tasks[key]
+            logger.debug(f"Stopped batch compute task for {key}")
+
+        logger.info(f"Stopped background tasks for {key}")
     
     async def _stop_oi_updates(self, symbol: str) -> None:
         """
@@ -793,21 +925,25 @@ class LiveOptionChainBuilder:
             del self.oi_update_tasks[symbol]
             logger.info(f"Stopped OI updates for {symbol}")
     
-    async def _oi_update_loop(self, symbol: str) -> None:
+    async def _oi_update_loop(self, symbol: str, expiry: str, registry) -> None:
         """
         Periodic OI update loop - runs every 60 seconds
         """
+        # 🔥 WAIT FOR REGISTRY BEFORE BACKGROUND ACCESS
+        await registry.wait_until_ready()
+        
         try:
             while True:
-                await self._fetch_global_oi(symbol)
+                await self._fetch_global_oi(symbol, expiry, registry)
                 await asyncio.sleep(60)  # Update every 60 seconds
         
         except asyncio.CancelledError:
-            logger.info(f"OI update loop cancelled for {symbol}")
+            logger.debug(f"Loop cancelled for {symbol}:{expiry}")
+            raise
         except Exception as e:
-            logger.error(f"Error in OI update loop for {symbol}: {e}")
+            logger.error(f"Error in OI update loop for {symbol}:{expiry}: {e}")
     
-    async def _fetch_global_oi(self, symbol: str) -> None:
+    async def _fetch_global_oi(self, symbol: str, expiry: str, registry) -> None:
         """
         Fetch global OI from REST API for active expiry
         """
@@ -931,18 +1067,19 @@ class LiveOptionChainBuilder:
         
         logger.info(f"Cleaned up resources for {symbol}")
     
-    async def _start_batch_compute(self, symbol: str) -> None:
+    async def _start_batch_compute(self, symbol: str, expiry: str, registry) -> None:
         """
         Start batch compute loop for optimized processing
         """
-        if symbol in self._batch_compute_tasks:
-            logger.warning(f"Batch compute task already running for {symbol}")
+        key = f"{symbol}:{expiry}"
+        if key in self._batch_compute_tasks:
+            logger.warning(f"Batch compute task already running for {symbol}:{expiry}")
             return
         
-        self._batch_compute_tasks[symbol] = asyncio.create_task(
-            self._batch_compute_loop(symbol)
+        self._batch_compute_tasks[key] = asyncio.create_task(
+            self._batch_compute_loop(symbol, expiry, registry)
         )
-        logger.info(f"Started batch compute loop for {symbol}")
+        logger.info(f"Started batch compute loop for {symbol}:{expiry}")
     
     async def _stop_batch_compute(self, symbol: str) -> None:
         """
@@ -959,12 +1096,16 @@ class LiveOptionChainBuilder:
             del self._batch_compute_tasks[symbol]
             logger.info(f"Stopped batch compute loop for {symbol}")
     
-    async def _batch_compute_loop(self, symbol: str) -> None:
+    async def _batch_compute_loop(self, symbol: str, expiry: str, registry) -> None:
         """
         Batch compute loop - handles PCR calculation, payload building, and broadcasting
         Runs every 500ms to optimize performance
+        Updated to broadcast payload even when market is CLOSED for development
         """
-        logger.info(f"Starting batch compute loop for {symbol}")
+        # 🔥 WAIT FOR REGISTRY BEFORE BACKGROUND ACCESS
+        await registry.wait_until_ready()
+        
+        logger.debug(f"Starting batch compute loop for {symbol}:{expiry}")
         
         try:
             while True:
@@ -975,7 +1116,30 @@ class LiveOptionChainBuilder:
                     continue
                 
                 try:
-                    # Check for ATM rebalancing (moved from handle_tick)
+                    # ENSURE SPOT PRICE VIA REST FALLBACK (even when market is CLOSED)
+                    if not chain.spot_price:
+                        try:
+                            from app.services.market_data.upstox_client import UpstoxClient
+                            client = UpstoxClient()
+                            
+                            # Determine index key based on symbol
+                            index_key = "NSE_INDEX|Nifty 50" if symbol == "NIFTY" else "NSE_INDEX|Nifty Bank"
+                            spot = await client.get_ltp(index_key)
+
+                            if spot:
+                                chain.spot_price = float(spot)
+                                logger.info(f"🔄 REST FALLBACK SPOT for {symbol} → {spot}")
+                                
+                                # Initialize ATM window on first spot price
+                                if chain.current_atm_strike is None:
+                                    atm_strike = chain.calculate_atm_strike(chain.spot_price)
+                                    chain.current_atm_strike = atm_strike
+                                    logger.info(f"🔄 ATM initialized for {symbol} → {atm_strike}")
+                        except Exception as e:
+                            logger.error(f"REST fallback failed for {symbol}: {e}")
+                            # Continue without spot price - still broadcast empty payload for development
+                    
+                    # Check for ATM rebalancing (if we have spot price)
                     if chain.spot_price and chain.current_atm_strike:
                         new_atm_strike = chain.calculate_atm_strike(chain.spot_price)
                         if chain.should_rebalance_window(new_atm_strike):
@@ -985,47 +1149,54 @@ class LiveOptionChainBuilder:
                     # Compute PCR once per batch
                     chain.pcr = self._calculate_pcr(chain)
                     
-                    # Build payload once per batch
+                    # Build payload once per batch (works even with live OI = 0)
                     payload = self._build_payload(chain)
                     
-                    # Broadcast once per batch
+                    # Broadcast once per batch (even when market is CLOSED)
                     await self._broadcast(symbol, payload)
                     
                 except Exception as e:
                     logger.error(f"Error in batch compute for {symbol}: {e}")
                     
         except asyncio.CancelledError:
-            logger.info(f"Batch compute loop cancelled for {symbol}")
+            logger.debug(f"Loop cancelled for {symbol}:{expiry}")
+            raise
         finally:
-            logger.info(f"Batch compute loop ended for {symbol}")
+            logger.info(f"Batch compute loop ended for {symbol}:{expiry}")
     
     def _calculate_pcr(self, chain: LiveChainState) -> float:
-        """
-        Calculate Put-Call Ratio from chain state
-        """
+
         try:
             total_call_oi = 0
             total_put_oi = 0
-            
-            for strike_data in chain.strike_map.values():
-                if 'CE' in strike_data:
-                    total_call_oi += strike_data['CE'].get('oi', 0)
-                if 'PE' in strike_data:
-                    total_put_oi += strike_data['PE'].get('oi', 0)
-            
+
+            for strike, pair in chain.strike_map.items():
+
+                if not isinstance(pair, dict):
+                    continue
+
+                ce_key = pair.get("CE")
+                pe_key = pair.get("PE")
+
+                if ce_key:
+                    ce_oi = self.oi_data.get(ce_key, {}).get("oi", 0)
+                    total_call_oi += ce_oi
+
+                if pe_key:
+                    pe_oi = self.oi_data.get(pe_key, {}).get("oi", 0)
+                    total_put_oi += pe_oi
+
             if total_call_oi == 0:
                 return 0.0
-            
+
             return total_put_oi / total_call_oi
-            
+
         except Exception as e:
             logger.error(f"Error calculating PCR: {e}")
             return 0.0
     
     def _build_payload(self, chain: LiveChainState) -> Dict[str, Any]:
-        """
-        Build option chain payload for broadcasting
-        """
+
         try:
             payload = {
                 "symbol": chain.symbol,
@@ -1036,33 +1207,43 @@ class LiveOptionChainBuilder:
                 "calls": [],
                 "puts": []
             }
-            
-            # Build calls and puts arrays
-            for strike, strike_data in chain.strike_map.items():
-                if 'CE' in strike_data:
+
+            # BUILD PAYLOAD USING STRIKE_MAP even when live OI = 0
+            for strike, pair in chain.strike_map.items():
+
+                if not isinstance(pair, dict):
+                    continue
+
+                ce_key = pair.get("CE")
+                pe_key = pair.get("PE")
+
+                # Use live OI data if available, otherwise use 0 (development mode)
+                ce_data = self.oi_data.get(ce_key, {}) if ce_key else {}
+                pe_data = self.oi_data.get(pe_key, {}) if pe_key else {}
+
+                if ce_key:
                     payload["calls"].append({
                         "strike": strike,
-                        "instrument_key": strike_data['CE'].get('instrument_key', ''),
-                        "ltp": strike_data['CE'].get('ltp', 0),
-                        "oi": strike_data['CE'].get('oi', 0),
-                        "volume": strike_data['CE'].get('volume', 0)
+                        "instrument_key": ce_key,
+                        "ltp": ce_data.get("ltp", 0),
+                        "oi": ce_data.get("oi", 0),  # Will be 0 when market is closed
+                        "volume": ce_data.get("volume", 0)
                     })
-                
-                if 'PE' in strike_data:
+
+                if pe_key:
                     payload["puts"].append({
                         "strike": strike,
-                        "instrument_key": strike_data['PE'].get('instrument_key', ''),
-                        "ltp": strike_data['PE'].get('ltp', 0),
-                        "oi": strike_data['PE'].get('oi', 0),
-                        "volume": strike_data['PE'].get('volume', 0)
+                        "instrument_key": pe_key,
+                        "ltp": pe_data.get("ltp", 0),
+                        "oi": pe_data.get("oi", 0),  # Will be 0 when market is closed
+                        "volume": pe_data.get("volume", 0)
                     })
-            
-            # Sort by strike
+
             payload["calls"].sort(key=lambda x: x["strike"])
             payload["puts"].sort(key=lambda x: x["strike"])
-            
+
             return payload
-            
+
         except Exception as e:
             logger.error(f"Error building payload: {e}")
             return {
@@ -1074,18 +1255,17 @@ class LiveOptionChainBuilder:
                 "calls": [],
                 "puts": []
             }
-    
+        
     async def _broadcast(self, symbol: str, payload: Dict[str, Any]) -> None:
-        """
-        Broadcast payload to connected WebSocket clients
-        """
         try:
-            # This will be implemented to broadcast to WebSocket clients
-            # For now, just log the payload size
-            logger.debug(f"Broadcasting payload for {symbol}: {len(payload['calls'])} calls, {len(payload['puts'])} puts")
-            
+            # 🔥 FORWARD RAW PAYLOAD DIRECTLY (no market_data wrapper)
+            # This ensures calls[] and puts[] reach frontend as expected
+            await manager.broadcast_json(symbol, payload)
+
+            print(f"📡 WS BROADCAST SENT for {symbol}")
+
         except Exception as e:
-            logger.error(f"Error broadcasting payload for {symbol}: {e}")
+            logger.error(f"Broadcast failed for {symbol}: {e}")
 
 # Global instance
 _builder_instance = None
