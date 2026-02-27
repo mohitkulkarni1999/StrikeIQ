@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useWSStore } from '../core/ws/wsStore';
 import api from '../lib/api';
 
 // Types for WebSocket messages
@@ -77,7 +78,9 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         console.log("🔗 CONNECTING TO WebSocket:", url);
 
-        const ws = new WebSocket(url);
+        // Use global store instead of creating WebSocket
+        const { connect } = useWSStore();
+        const ws = connect(symbol, expiry);
         wsRef.current = ws;
 
         ws.onopen = () => {

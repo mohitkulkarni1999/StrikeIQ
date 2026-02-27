@@ -180,7 +180,7 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
         <div className="rounded-2xl overflow-hidden" style={CARD}>
           <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.40), transparent)' }} />
           <div className="p-4 sm:p-5">
-            <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
+            <MemoizedOIHeatmap symbol={symbol} />
           </div>
         </div>
 

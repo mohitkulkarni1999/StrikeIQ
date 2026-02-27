@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { BarChart3, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import api from '../lib/api';
 import { useWSStore } from '../core/ws/wsStore';
+import { useDashboardData } from '../hooks/useDashboardData';
 
 interface OIData {
   strike: number;
@@ -19,31 +20,64 @@ interface OIData {
 
 interface OIHeatmapProps {
   symbol: string;
-  liveData?: any; // Live option chain data from useLiveMarketData
 }
 
-export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
+const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
+  
+  // Use global store data
+  const { calls, puts, connected } = useDashboardData();
+
   const [oiData, setOiData] = useState<OIData[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Read from Zustand store
-  const { liveData: wsLiveData } = useWSStore();
+  // Read from Zustand store for fallback
+  const { liveData: wsLiveData, optionChainSnapshot, spot } = useWSStore();
   
-  // Use WebSocket live data if available, otherwise fallback to prop
-  const actualLiveData = wsLiveData || liveData;
+  // Use structured data from global store, fallback to legacy data
+  const actualLiveData = calls.length > 0 || puts.length > 0 
+    ? { calls, puts, spot }
+    : wsLiveData || optionChainSnapshot;
+
+  // 🔥 PCR FALLBACK CALCULATION (FRONTEND-ONLY FIX)
+  const calculatePCR = useCallback((data: any) => {
+    if (!data || !data.calls || !data.puts) return 0;
+    
+    const totalCallOI = data.calls.reduce((sum: number, call: any) => 
+      sum + (call.open_interest || call.oi || 0), 0);
+    const totalPutOI = data.puts.reduce((sum: number, put: any) => 
+      sum + (put.open_interest || put.oi || 0), 0);
+    
+    return totalCallOI > 0 ? totalPutOI / totalCallOI : 0;
+  }, [actualLiveData]);
+
+  // Use backend PCR if valid, otherwise fallback to calculated PCR
+  const pcr = actualLiveData?.pcr && actualLiveData.pcr > 0
+    ? actualLiveData.pcr
+    : calculatePCR(actualLiveData);
+
+  // 🔥 PCR DEBUG LOGGING
+  console.log("🔥 PCR ANALYSIS:", {
+    backendPCR: actualLiveData?.pcr,
+    calculatedPCR: calculatePCR(actualLiveData),
+    effectivePCR: pcr,
+    hasValidCalls: !!(actualLiveData?.calls?.length),
+    hasValidPuts: !!(actualLiveData?.puts?.length),
+    totalCallOI: actualLiveData?.calls?.reduce((s: number, c: any) => s + (c.open_interest || c.oi || 0), 0),
+    totalPutOI: actualLiveData?.puts?.reduce((s: number, p: any) => s + (p.open_interest || p.oi || 0), 0)
+  });
 
   const tableRef = useRef<HTMLDivElement>(null);
   const atmRowRef = useRef<HTMLTableRowElement>(null);
   const hasScrolledRef = useRef<boolean>(false);
 
   // DEBUG: Log props and structure
-  console.log("OIHeatmap props:", { symbol, liveData });
+  console.log("OIHeatmap props:", { symbol });
   console.log("WS LIVE DATA FROM STORE:", wsLiveData);
+  console.log("OPTION_CHAIN_SNAPSHOT FROM STORE:", optionChainSnapshot);
   console.log("ACTUAL LIVE DATA:", actualLiveData);
   console.log("LIVE DATA STRUCTURE:", actualLiveData ? Object.keys(actualLiveData) : 'null');
-  console.log("OPTION_CHAIN_SNAPSHOT:", actualLiveData?.option_chain_snapshot);
 
   // Reset scroll flag when symbol changes
   useEffect(() => {
@@ -312,4 +346,6 @@ export default function OIHeatmap({ symbol, liveData }: OIHeatmapProps) {
       </div>
     </div>
   );
-}
+};
+
+export default OIHeatmap;

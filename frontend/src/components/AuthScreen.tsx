@@ -12,6 +12,7 @@ function AuthScreen({ authData }: AuthScreenProps) {
   const { checkAuth } = useAuth();
   const router = useRouter();
   const [isChecking, setIsChecking] = useState(true);
+  const [isAuthError, setIsAuthError] = useState(false);
 
   useEffect(() => {
     // Check authentication status on mount
@@ -24,9 +25,18 @@ function AuthScreen({ authData }: AuthScreenProps) {
           router.push('/');
         } else {
           setIsChecking(false);
+          setIsAuthError(true);
         }
-      } catch (error) {
-        setIsChecking(false);
+      } catch (error: any) {
+        // Only treat as auth error if status is 401 or 403
+        if (error.response?.status === 401 || error.response?.status === 403) {
+          setIsChecking(false);
+          setIsAuthError(true);
+        } else {
+          // For other errors (500, network, etc.), redirect to home or show error
+          console.warn("Backend unavailable or error, redirecting to home");
+          router.push('/');
+        }
       }
     };
 
@@ -52,6 +62,10 @@ function AuthScreen({ authData }: AuthScreenProps) {
         </div>
       </div>
     );
+  }
+
+  if (!isAuthError) {
+    return null; // This shouldn't happen as we redirect on non-auth errors, but safety
   }
 
   return (

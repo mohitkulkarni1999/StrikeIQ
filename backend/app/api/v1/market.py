@@ -4,6 +4,7 @@ from typing import Dict, Any
 from ...services.market_data.market_dashboard_service import MarketDashboardService
 from ...models.database import get_db
 from ...core.config import settings
+from ...services.instrument_registry import get_instrument_registry
 import logging
 from datetime import datetime
 
@@ -73,4 +74,94 @@ async def get_market_status(
         
     except Exception as e:
         logger.error(f"Error in market status API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/dashboard", response_model=Dict[str, Any])
+async def get_market_dashboard(
+    symbol: str = "NIFTY",
+    service: MarketDashboardService = Depends(get_market_service),
+    db: Session = Depends(get_db)
+):
+    """Get market dashboard data with spot, PCR, OI"""
+    try:
+        logger.info(f"API request: Market dashboard for {symbol}")
+        
+        # Get market snapshot data
+        from ai.ai_db import ai_db
+        ai_db.connect()
+        
+        query = """
+            SELECT spot_price, pcr, total_call_oi, total_put_oi, timestamp
+            FROM market_snapshot
+            WHERE symbol = %s
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """
+        
+        result = ai_db.fetch_one(query, (symbol.upper(),))
+        
+        if result:
+            dashboard_data = {
+                "symbol": symbol.upper(),
+                "spot": result[0],
+                "pcr": result[1],
+                "total_call_oi": result[2],
+                "total_put_oi": result[3],
+                "timestamp": result[4].isoformat() if result[4] else None
+            }
+            logger.info(f"Dashboard data found: spot={result[0]}, pcr={result[1]}, oi_call={result[2]}, oi_put={result[3]}")
+        else:
+            # Fallback to live data if no snapshot
+            logger.warning("No market snapshot found, fetching live data")
+            live_data = await service.get_dashboard_data(symbol.upper())
+            dashboard_data = {
+                "symbol": symbol.upper(),
+                "spot": live_data.get("last_price", 0),
+                "pcr": 0,  # Not available from live API
+                "total_call_oi": 0,  # Not available from live API
+                "total_put_oi": 0,  # Not available from live API
+                "timestamp": live_data.get("timestamp")
+            }
+        
+        ai_db.disconnect()
+        
+        return {
+            "status": "success",
+            "data": dashboard_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+    except Exception as e:
+        logger.error(f"Error in market dashboard API: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/expiries")
+async def get_market_expiries(symbol: str):
+    """Get available expiries for a symbol from InstrumentRegistry"""
+    try:
+        logger.info(f"API request: Expiries for {symbol}")
+        
+        registry = get_instrument_registry()
+        
+        symbol = symbol.upper().strip()
+        
+        expiry_map = registry.options.get(symbol)
+        
+        if not expiry_map:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No expiries found for symbol {symbol}"
+            )
+        
+        expiries = sorted(str(e) for e in expiry_map.keys())
+        
+        return {
+            "status": "success",
+            "data": expiries
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in expiries API: {e}")
         raise HTTPException(status_code=500, detail=str(e))

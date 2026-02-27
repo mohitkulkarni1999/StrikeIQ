@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { useWSStore } from '../core/ws/wsStore';
 
 // Enhanced interfaces for backend response
 interface MarketSessionData {
@@ -163,7 +164,9 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
 
         console.log("🔌 CONNECTING TO WebSocket:", wsUrl);
 
-        const ws = new WebSocket(wsUrl);
+        // Use global store instead of creating WebSocket
+        const { connect } = useWSStore();
+        const ws = connect(symbol, expiry);
         wsRef.current = ws;
 
         ws.onopen = () => {
@@ -308,8 +311,8 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
     useEffect(() => {
         fetchMarketStatus();
 
-        // Poll market status every 30 seconds
-        marketStatusIntervalRef.current = setInterval(fetchMarketStatus, 30000);
+        // Poll market status every 10 seconds
+        marketStatusIntervalRef.current = setInterval(fetchMarketStatus, 10000);
 
         return () => {
             if (marketStatusIntervalRef.current) {
@@ -330,12 +333,12 @@ export function useLiveMarketData(symbol: string, expiry: string | null): UseLiv
             console.log(`📸 Using REST snapshot mode - Engine: ${marketStatus.engine_mode}`);
             pollMarketData();
 
-            // Set up polling interval (every 15 seconds for snapshot modes)
+            // Set up polling interval (every 10 seconds for snapshot modes)
             pollIntervalRef.current = setInterval(() => {
                 if (mountedRef.current) {
                     pollMarketData();
                 }
-            }, 15000);
+            }, 10000);
         }
 
         return () => {

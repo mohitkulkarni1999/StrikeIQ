@@ -52,8 +52,8 @@ const DebugBadge: React.FC<DebugBadgeProps> = ({ className = "" }) => {
 
         fetchDebugInfo();
 
-        // Update every 5 seconds
-        const interval = setInterval(fetchDebugInfo, 5000);
+        // Update every 10 seconds
+        const interval = setInterval(fetchDebugInfo, 10000);
 
         return () => clearInterval(interval);
     }, []);

@@ -3,7 +3,6 @@ import { useEffect } from 'react';
 import { AuthProvider } from '@/contexts/AuthContext';
 import Navbar from '@/components/layout/Navbar';
 import AppBootstrapGuard from '@/components/AppBootstrapGuard';
-import WebSocketManager from '@/components/WebSocketManager';
 import '@/styles/globals.css';
 
 function MyApp({ Component, pageProps }: AppProps) {
@@ -38,8 +37,6 @@ function MyApp({ Component, pageProps }: AppProps) {
       <AppBootstrapGuard>
         <div className="min-h-screen bg-background text-text-primary">
           <Navbar />
-          {/* WebSocket Manager - ensures persistent connection */}
-          <WebSocketManager symbol="NIFTY" expiry="2026-02-26" />
           <Component {...pageProps} />
         </div>
       </AppBootstrapGuard>

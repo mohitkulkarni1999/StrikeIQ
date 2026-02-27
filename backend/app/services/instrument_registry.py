@@ -1,16 +1,20 @@
+from __future__ import annotations
+
 import asyncio
 import aiohttp
 import gzip
 import json
-from datetime import datetime
+from datetime import datetime, date
+from typing import Optional, Dict
+
+from app.core.redis_client import redis_client
 
 UPSTOX_CDN = "https://assets.upstox.com/market-quote/instruments/exchange/NSE.json.gz"
 
 
-def normalize_expiry(exp):
-
+def normalize_expiry(exp) -> Optional[str]:
     if isinstance(exp, int):
-        return datetime.utcfromtimestamp(exp/1000).date().isoformat()
+        return datetime.utcfromtimestamp(exp / 1000).date().isoformat()
 
     if isinstance(exp, str):
         if "-" in exp:
@@ -21,84 +25,205 @@ def normalize_expiry(exp):
 
 
 class InstrumentRegistry:
+    """
+    Production-safe Instrument Registry.
+
+    ✔ Each worker loads its own in-memory registry
+    ✔ Redis used only for distributed locking
+    ✔ No fake ready flags
+    ✔ Expiry normalization safe for both str & date
+    """
 
     def __init__(self):
 
-        self._loaded = asyncio.Event()
-        self._lock = asyncio.Lock()
+        self._ready_event = asyncio.Event()
+        self._local_lock = asyncio.Lock()
 
         # OPTIONS
         # {symbol:{expiry:{strike:{CE,PE}}}}
-        self.options = {}
+        self.options: Dict[str, Dict[str, Dict[int, Dict[str, str]]]] = {}
 
         # FUTURES
         # {symbol:{expiry:instrument_key}}
-        self.futidx = {}
+        self.futidx: Dict[str, Dict[str, str]] = {}
+
+    # --------------------------------------------------
+    # PUBLIC LOAD
+    # --------------------------------------------------
 
     async def load(self):
 
-        if self._loaded.is_set():
+        if self._ready_event.is_set():
             return
 
-        async with self._lock:
+        lock = redis_client.lock("instrument_registry_lock", timeout=120)
 
-            if self._loaded.is_set():
+        async with lock:
+
+            if self._ready_event.is_set():
                 return
 
-            async with aiohttp.ClientSession() as s:
-                async with s.get(UPSTOX_CDN) as r:
-                    gz = await r.read()
+            print("🔥 Loading Instrument Registry from Upstox CDN...")
 
-            raw = gzip.decompress(gz)
-            data = json.loads(raw)
+            async with self._local_lock:
+                try:
+                    async with aiohttp.ClientSession() as session:
+                        async with session.get(UPSTOX_CDN) as response:
+                            gz = await response.read()
 
-            if isinstance(data, dict) and "data" in data:
-                data = data["data"]
+                    raw = gzip.decompress(gz)
+                    data = json.loads(raw)
 
-            for inst in data:
+                    if isinstance(data, dict) and "data" in data:
+                        data = data["data"]
 
-                # only FO segment
-                if inst.get("segment") != "NSE_FO":
-                    continue
+                    for inst in data:
 
-                name = inst.get("name")
-                itype = inst.get("instrument_type")
+                        if inst.get("segment") != "NSE_FO":
+                            continue
 
-                # only index instruments
-                if name not in ("NIFTY", "BANKNIFTY"):
-                    continue
+                        name = inst.get("name")
+                        itype = inst.get("instrument_type")
 
-                expiry = normalize_expiry(inst.get("expiry"))
+                        # Only index derivatives
+                        if name not in ("NIFTY", "BANKNIFTY"):
+                            continue
 
-                if not expiry:
-                    continue
+                        expiry = normalize_expiry(inst.get("expiry"))
+                        if not expiry:
+                            continue
 
-                # ============================
-                # OPTIONS (CE / PE)
-                # ============================
+                        # -------------------------
+                        # OPTIONS
+                        # -------------------------
+                        if itype in ("CE", "PE"):
 
-                if itype in ("CE", "PE"):
+                            strike = int(inst["strike_price"])
 
-                    strike = int(inst["strike_price"])
+                            self.options \
+                                .setdefault(name, {}) \
+                                .setdefault(expiry, {}) \
+                                .setdefault(strike, {})[itype] = inst["instrument_key"]
 
-                    self.options \
-                        .setdefault(name, {}) \
-                        .setdefault(expiry, {}) \
-                        .setdefault(strike, {})[itype] = inst["instrument_key"]
+                        # -------------------------
+                        # FUTURES
+                        # -------------------------
+                        elif itype == "FUT":
 
-                # ============================
-                # FUTURES  ✅ FIX HERE
-                # ============================
+                            self.futidx \
+                                .setdefault(name, {})[expiry] = inst["instrument_key"]
 
-                elif itype == "FUT":
+                    print("🟢 Instrument Registry Loaded Successfully")
+                    print(f"Available Symbols: {list(self.options.keys())}")
 
-                    self.futidx \
-                        .setdefault(name, {})[expiry] = inst["instrument_key"]
+                    self._ready_event.set()
 
-            print("📦 Runtime instruments loaded from Upstox CDN")
-            print(f"🟢 FUTIDX Loaded: {list(self.futidx.keys())}")
+                except Exception as e:
+                    print(f"⚠️ CDN load failed: {e}")
+                    print("🔄 Attempting to load from local cache...")
+                    
+                    # Fallback to local cache
+                    try:
+                        await self._load_from_local_cache()
+                    except Exception as cache_error:
+                        print(f" Local cache fallback failed: {cache_error}")
+                        raise Exception("Both CDN and local cache failed")
 
-            self._loaded.set()
+    async def _load_from_local_cache(self):
+        """Load instruments from local cache file"""
+        import os
+        from pathlib import Path
+        
+        cache_file = Path("data/instruments.json")
+        
+        if not cache_file.exists():
+            raise FileNotFoundError("Local cache file not found")
+        
+        print(f" Loading from local cache: {cache_file}")
+        
+        with open(cache_file, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+        
+        if isinstance(raw, dict) and "instruments" in raw:
+            data = raw["instruments"]
+        elif isinstance(raw, list):
+            data = raw
+        else:
+            raise ValueError("Invalid cache format")
+
+        for inst in data:
+            if inst.get("segment") != "NSE_FO":
+                continue
+
+            name = inst.get("name")
+            itype = inst.get("instrument_type")
+
+            # Only index derivatives
+            if name not in ("NIFTY", "BANKNIFTY"):
+                continue
+
+            expiry = normalize_expiry(inst.get("expiry"))
+            if not expiry:
+                continue
+
+            # -------------------------
+            # OPTIONS
+            # -------------------------
+            if itype in ("CE", "PE"):
+                strike = int(inst["strike_price"])
+
+                self.options \
+                    .setdefault(name, {}) \
+                    .setdefault(expiry, {}) \
+                    .setdefault(strike, {})[itype] = inst["instrument_key"]
+
+            # -------------------------
+            # FUTURES
+            # -------------------------
+            elif itype == "FUT":
+                self.futidx \
+                    .setdefault(name, {})[expiry] = inst["instrument_key"]
+
+        print(" Instrument Registry Loaded from Local Cache")
+        print(f"Available Symbols: {list(self.options.keys())}")
+        
+        self._ready_event.set()
+
+    # --------------------------------------------------
+    # WAIT FOR READY
+    # --------------------------------------------------
 
     async def wait_until_ready(self):
-        await self._loaded.wait()
+        await self._ready_event.wait()
+
+    # --------------------------------------------------
+    # SAFE ACCESSORS (FIXED)
+    # --------------------------------------------------
+
+    def get_options(self, symbol: str, expiry):
+        # 🔥 Normalize expiry to string
+        if isinstance(expiry, date):
+            expiry = expiry.isoformat()
+        return self.options.get(symbol, {}).get(expiry)
+
+    def get_future(self, symbol: str, expiry):
+        # 🔥 Normalize expiry to string
+        if isinstance(expiry, date):
+            expiry = expiry.isoformat()
+        return self.futidx.get(symbol, {}).get(expiry)
+
+
+# --------------------------------------------------
+# SINGLETON
+# --------------------------------------------------
+
+_registry_instance: InstrumentRegistry | None = None
+
+
+def get_instrument_registry() -> InstrumentRegistry:
+    global _registry_instance
+
+    if _registry_instance is None:
+        _registry_instance = InstrumentRegistry()
+
+    return _registry_instance

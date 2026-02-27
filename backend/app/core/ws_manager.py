@@ -1,35 +1,104 @@
 from fastapi import WebSocket
-from typing import Dict, List, Set
-import json
+from typing import Dict, Set
+import asyncio
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 class WSConnectionManager:
+
     def __init__(self):
+
+        # channel → websocket connections
         self.active_connections: Dict[str, Set[WebSocket]] = {}
 
-    async def connect(self, websocket: WebSocket, symbol: str):
-        # WebSocket already accepted in live_ws.py - do NOT accept again
-        if symbol not in self.active_connections:
-            self.active_connections[symbol] = set()
+        # prevent race conditions
+        self._lock = asyncio.Lock()
 
-        self.active_connections[symbol].add(websocket)
+    # ================= CONNECT =================
 
-    def disconnect(self, websocket: WebSocket, symbol: str):
-        if symbol in self.active_connections:
-            if websocket in self.active_connections[symbol]:
-                self.active_connections[symbol].remove(websocket)
+    async def connect(self, key: str, websocket: WebSocket):
 
-    async def broadcast_json(self, symbol: str, message: dict):
-        if symbol not in self.active_connections:
-            return
+        async with self._lock:
 
-        dead = []
-        for ws in self.active_connections[symbol]:
+            if key not in self.active_connections:
+                self.active_connections[key] = set()
+
+            self.active_connections[key].add(websocket)
+
+            logger.info(
+                f"🟢 WS CONNECTED → {key} → {len(self.active_connections[key])} clients"
+            )
+
+    # ================= DISCONNECT =================
+
+    async def disconnect(self, key: str, websocket: WebSocket):
+
+        async with self._lock:
+
+            if key not in self.active_connections:
+                return
+
+            self.active_connections[key].discard(websocket)
+
+            if not self.active_connections[key]:
+                del self.active_connections[key]
+
+            logger.info(
+                f"🔴 WS DISCONNECTED → {key} → remaining={len(self.active_connections.get(key, []))}"
+            )
+
+    # ================= BROADCAST =================
+
+    async def broadcast_json(self, key: str, message: dict):
+
+        async with self._lock:
+
+            if key not in self.active_connections:
+                logger.warning(f"⚠️ No active connections for channel: {key}")
+                return
+
+            connections = list(self.active_connections[key])
+            logger.info(f"📡 Broadcasting to {len(connections)} clients on channel '{key}'")
+
+        dead_connections = []
+        sent_count = 0
+
+        for ws in connections:
+
             try:
-                await ws.send_text(json.dumps(message))
-            except:
-                dead.append(ws)
 
-        for ws in dead:
-            self.active_connections[symbol].remove(ws)
+                await ws.send_json(message)
 
+                sent_count += 1
+                logger.debug(f"✅ Message sent to client {sent_count}")
+
+            except Exception as e:
+
+                logger.warning(f"❌ Failed to send to client: {e}")
+                dead_connections.append(ws)
+
+        # cleanup dead sockets
+        if dead_connections:
+
+            async with self._lock:
+
+                for ws in dead_connections:
+
+                    if key in self.active_connections:
+                        self.active_connections[key].discard(ws)
+
+                if key in self.active_connections and not self.active_connections[key]:
+                    del self.active_connections[key]
+
+        logger.info(
+            f"📡 BROADCAST → {key} → sent={sent_count} dead={len(dead_connections)}"
+        )
+        
+        # Log the actual message being broadcasted
+        logger.debug(f"📨 Message broadcasted: {message}")
+
+
+# singleton instance
 manager = WSConnectionManager()

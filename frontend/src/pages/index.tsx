@@ -19,14 +19,14 @@ export default function Home() {
     const fetchMarketStatus = async () => {
       try {
         const res = await axios.get('/api/v1/market/session');
-        const body = res.data;
-        const ms = body?.data?.market_status ?? body?.market_status ?? null;
-        if (ms) {
-          setMarketStatus(ms);
-          setStatusError(false);
+        const data = res.data;
+        
+        if (data?.market_open === true) {
+          setMarketStatus('OPEN');
         } else {
-          setStatusError(true);
+          setMarketStatus('CLOSED');
         }
+        setStatusError(false);
       } catch {
         setStatusError(true);
       }
@@ -37,7 +37,7 @@ export default function Home() {
     return () => clearInterval(id);
   }, []);
 
-  const marketOpen = marketStatus ? OPEN_STATES.includes(marketStatus) : false;
+  const marketOpen = marketStatus === 'OPEN';
   const statusResolved = marketStatus !== null || statusError;
 
   return (

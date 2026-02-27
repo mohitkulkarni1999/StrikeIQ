@@ -1,161 +1,176 @@
-"""
-Live WebSocket Endpoints - Live Option Chain Builder
-WS SAFE VERSION (No HTTPException leakage)
-Updated to forward option chain payloads directly without market_data wrapper
-"""
-
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Optional
 
-from fastapi import WebSocket, WebSocketDisconnect, APIRouter
+from fastapi import WebSocket, WebSocketDisconnect, APIRouter, HTTPException
 
 from app.services.websocket_market_feed import ws_feed_manager
 from app.services.upstox_auth_service import get_upstox_auth_service
-from app.services.market_session_manager import get_market_session_manager
-from app.services.live_option_chain_builder import get_live_chain_builder
+from app.services.instrument_registry import get_instrument_registry   # ✅ FIXED
+from app.services.live_chain_manager import chain_manager
 from app.core.ws_manager import manager
-from app.core.instrument_runtime import registry
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 logger = logging.getLogger(__name__)
 
 
-async def safe_cancel_task(task: Optional[asyncio.Task]) -> None:
-    if task and not task.done():
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
-
-
-async def stream_market_status(symbol: str, websocket: WebSocket):
-    """
-    Stream market session status separately (not overriding option chain data)
-    """
-    session_manager = get_market_session_manager()
-
-    try:
-        while True:
-            # Send market status separately
-            await websocket.send_json({
-                "status": "market_data",
-                "data": {
-                    "market_status": str(session_manager.market_status),
-                    "timestamp": datetime.now(timezone.utc).isoformat()
-                }
-            })
-
-            await asyncio.sleep(30)  # Send market status every 30 seconds
-
-    except asyncio.CancelledError:
-        logger.info(f"Market status stream cancelled for {symbol}")
-
-    except Exception as e:
-        logger.error(f"Market status broadcast error: {e}")
-
-
 @router.websocket("/live-options/{symbol}")
-async def websocket_endpoint(
-    websocket: WebSocket,
-    symbol: str,
-    expiry: Optional[str] = None,
-    expiry_date: Optional[str] = None
-):
+async def websocket_endpoint(websocket: WebSocket, symbol: str):
 
-    # ✅ MUST be first line - accept immediately
-    await websocket.accept()
+    expiry = websocket.query_params.get("expiry")
 
-    final_expiry = expiry or expiry_date
-
-    if not final_expiry:
+    if expiry in [None, "null", "None", "", "undefined"]:
         await websocket.close(code=1008)
         return
 
-    logger.info(f"WebSocket connection - symbol: {symbol}, expiry: {final_expiry}")
+    key = f"{symbol}:{expiry}"
 
-    # 🔐 AUTH CHECK
+    await websocket.accept()
+    logger.info(f"WS CONNECTED → {key}")
+
+    auth_service = get_upstox_auth_service()
+
+    # START GLOBAL FEED
+    ws_feed = await ws_feed_manager.get_feed()
+    if not ws_feed:
+        try:
+            ws_feed = await ws_feed_manager.start_feed()
+        except HTTPException as e:
+            logger.error(f" WS AUTH FAILED → {e.detail}")
+            try:
+                await websocket.send_json({
+                    "status": "error",
+                    "message": "Authentication required",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            except Exception:
+                logger.warning("Client disconnected during auth error")
+            await websocket.close(code=4401)  # custom auth failure code
+            return
+        except Exception as e:
+            logger.error(f" WS INTERNAL ERROR → {str(e)}")
+            try:
+                await websocket.send_json({
+                    "status": "error", 
+                    "message": "Internal server error",
+                    "timestamp": datetime.now(timezone.utc).isoformat()
+                })
+            except Exception:
+                logger.warning("Client disconnected during internal error")
+            await websocket.close(code=1011)  # internal error
+            return
+
+    if not ws_feed:
+        try:
+            await websocket.send_json({
+                "status": "error",
+                "message": "Market feed unavailable",
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            })
+        except Exception:
+            logger.warning("Client disconnected during market feed error")
+        return
+
+    builder = None
+
     try:
-        auth_service = get_upstox_auth_service()
+
         token = await auth_service.get_valid_access_token()
 
         if not token:
-            await websocket.send_json({
-                "status": "error",
-                "msg": "Upstox token missing"
-            })
-            await websocket.close(code=1011)
+            try:
+                await websocket.send_json({
+                    "status": "error",
+                    "message": "Authentication required"
+                })
+            except Exception:
+                logger.warning("Client disconnected during token error")
             return
 
-    except Exception as e:
-        logger.error(f"Auth failed: {e}")
-        await websocket.send_json({
-            "status": "error",
-            "msg": "Auth failed"
-        })
-        await websocket.close(code=1011)
-        return
+        # ✅ GET SINGLETON REGISTRY
+        registry = get_instrument_registry()
 
-    # 🚀 START SHARED WS FEED
-    try:
-        ws_feed = ws_feed_manager.feed
+        # ✅ WAIT UNTIL READY
+        await registry.wait_until_ready()
 
-        if not ws_feed or not ws_feed.is_connected:
-            logger.info("🚀 AUTO STARTING WS FEED...")
-            ws_feed = await ws_feed_manager.start_feed()
-
-        if not ws_feed:
-            await websocket.send_json({
-                "status": "error",
-                "msg": "WS Feed failed"
-            })
-            await websocket.close(code=1011)
+        # BUG 2 — FIX symbol_upper not defined
+        symbol_upper = symbol.upper()
+        
+        # PATCH 4 — PREVENT INVALID EXPIRY LOOP
+        valid_expiries = registry.options.get(symbol_upper, {}).keys()
+        
+        if expiry not in valid_expiries:
+            try:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": "Invalid expiry"
+                })
+            except Exception:
+                logger.warning("Client disconnected")
             return
+            await websocket.close(code=1008)
+            return
+        
+        logger.info(f"✅ Expiry validated: {symbol_upper}:{expiry}")
+        
+        # PER EXPIRY BUILDER
+        # Convert expiry string to date object for registry compatibility
+        expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
+        builder = await chain_manager.get_builder(symbol, expiry_date)
 
-        logger.info("🟢 USING SHARED WS FEED")
+        # START BUILDER ONLY ONCE
+        await builder.start()
+
+        # REGISTER CLIENT
+        await manager.connect(key, websocket)
+
+        logger.info(f"WS REGISTERED → {key}")
+
+        # 🔥 CRITICAL FIX: Send initial chain state even if empty
+        try:
+            chain_state = builder.get_latest_option_chain()
+            if chain_state:
+                chain_data = chain_state.build_final_chain()
+                logger.info(f"🔍 [INITIAL CHAIN] {symbol_upper}: spot={chain_data.get('spot')}, spot_price={chain_data.get('spot_price')}")
+                await websocket.send_json({
+                    "type": "chain_update",
+                    "data": chain_data
+                })
+                logger.info(f"📤 SENT INITIAL CHAIN: {len(chain_data.get('calls', []))} calls, {len(chain_data.get('puts', []))} puts")
+            else:
+                await websocket.send_json({
+                    "type": "waiting",
+                    "message": "Waiting for market data...",
+                    "symbol": symbol_upper,
+                    "expiry": expiry
+                })
+                logger.info(f"📤 SENT WAITING MESSAGE for {key}")
+        except Exception as e:
+            logger.error(f"Failed to send initial chain: {e}")
+
+        try:
+            while True:
+                # Send periodic heartbeat to prevent connection timeout
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=20.0)
+                except asyncio.TimeoutError:
+                    # Send heartbeat if no message received within 20 seconds
+                    await websocket.send_json({"type": "heartbeat"})
+                    continue
+
+        except WebSocketDisconnect:
+            logger.info(f"WS DISCONNECTED → {key}")
+
+            await manager.disconnect(key, websocket)
+
+            if builder:
+                await builder.stop_tasks()
 
     except Exception as e:
-        logger.error(f"Feed start failed: {e}")
-        await websocket.close(code=1011)
-        return
 
-    builder = get_live_chain_builder()
+        logger.error(f"WS ERROR → {key}: {e}")
 
-    # 🟡 SAFE BUILDER INIT (NO HTTPException)
-    try:
-        logger.info(f"🚀 INITIALIZING OPTION CHAIN FOR {symbol}")
-        await builder.initialize_chain(symbol, final_expiry, registry)
-        await builder.subscribe_to_instruments(symbol)
+        if builder:
+            await builder.stop_tasks()
 
-    except Exception as e:
-        logger.error(f"Builder init failed: {e}")
-        await websocket.send_json({
-            "status": "error",
-            "msg": "Option chain init failed"
-        })
-        await websocket.close(code=1011)
-        return
-
-    # 🔥 CONNECT TO WS MANAGER TO RECEIVE BROADCASTS
-    # This allows LiveOptionChainBuilder._broadcast() to send directly to this client
-    await manager.connect(websocket, symbol)
-    logger.info(f"📡 Connected to WS manager for {symbol}")
-
-    # 📊 START MARKET STATUS STREAM (separate from option chain data)
-    market_status_task = asyncio.create_task(
-        stream_market_status(symbol, websocket)
-    )
-
-    try:
-        while True:
-            await websocket.receive_text()
-
-    except WebSocketDisconnect:
-        logger.info(f"Disconnected {symbol}")
-        await builder.stop_tasks(symbol, final_expiry)
-
-    finally:
-        await safe_cancel_task(market_status_task)
-        manager.disconnect(websocket, symbol)
+        await manager.disconnect(key, websocket)

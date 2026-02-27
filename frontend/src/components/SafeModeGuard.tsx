@@ -1,4 +1,5 @@
 import React from 'react';
+import { useWSStore } from '@/core/ws/wsStore';
 
 interface SafeModeGuardProps {
     engineMode: string;
@@ -8,87 +9,103 @@ interface SafeModeGuardProps {
 }
 
 /**
- * SafeModeGuard - Implements comprehensive mode-based guards
- * Prevents components from running in inappropriate modes
+ * SafeModeGuard - WS-AWARE VERSION
+ * Forces LIVE UI when WebSocket spot_price exists
  */
-const SafeModeGuard: React.FC<SafeModeGuardProps> = ({ 
-    engineMode, 
-    dataSource, 
-    children, 
-    fallback = null 
+const SafeModeGuard: React.FC<SafeModeGuardProps> = ({
+    engineMode,
+    dataSource,
+    children,
+    fallback = null
 }) => {
-    
-    // STALE WS DATA PREVENTION GUARD
-    if (engineMode === "SNAPSHOT" && dataSource === "rest_snapshot") {
-        console.log("🛡️ SafeModeGuard: Using snapshot mode - preventing stale WS data");
-        
-        // Children can render but should use REST data only
+
+    // 🔥 WS-AWARE LIVE OVERRIDE FIX
+    const store = useWSStore.getState();
+
+    const wsSpot =
+        store.liveData?.spot_price ??
+        store.optionChainSnapshot?.spot_price ??
+        0;
+
+    // FORCE LIVE if WS has valid spot
+    const effectiveMode =
+        engineMode !== "LIVE" && wsSpot > 0
+            ? "LIVE"
+            : engineMode;
+
+    console.log("🛡️ SafeModeGuard MODE FIX:", {
+        engineMode,
+        wsSpot,
+        effectiveMode
+    });
+
+    // SNAPSHOT GUARD
+    if (effectiveMode === "SNAPSHOT" && dataSource === "rest_snapshot") {
+        console.log("🛡️ Snapshot mode active");
         return <>{children}</>;
     }
-    
-    // ENGINE MODE UI VALIDATION GUARD
-    if (engineMode !== "LIVE") {
-        // Disable live animations and WS-dependent components
-        console.log(`🛡️ SafeModeGuard: Disabling live features - Engine mode: ${engineMode}`);
-        
+
+    // ENGINE MODE UI VALIDATION GUARD (WITH WS OVERRIDE)
+    if (effectiveMode !== "LIVE") {
+        console.log(`🛡️ Disabling live UI - Mode: ${effectiveMode}`);
+
         if (fallback) {
             return <>{fallback}</>;
         }
-        
-        // Return children with disabled state if no fallback provided
+
         return (
             <div className="opacity-50 pointer-events-none">
                 {children}
             </div>
         );
     }
-    
-    // LIVE MODE - Full functionality
-    console.log("✅ SafeModeGuard: Live mode enabled - full functionality");
+
+    console.log("✅ SafeModeGuard: LIVE MODE UNLOCKED VIA WS");
     return <>{children}</>;
 };
 
 /**
  * Hook to check if component should be enabled based on mode
  */
-export const useModeGuard = (engineMode: string, requiredMode: 'LIVE' | 'SNAPSHOT' | 'HALTED' | 'ANY') => {
+export const useModeGuard = (
+    engineMode: string,
+    requiredMode: 'LIVE' | 'SNAPSHOT' | 'HALTED' | 'ANY'
+) => {
     if (requiredMode === 'ANY') return true;
     return engineMode === requiredMode;
 };
 
 /**
- * Hook to get effective spot price based on mode
+ * 🔥 FULL FIXED EFFECTIVE SPOT HOOK
+ * Survives WS reconnect flicker
  */
 export const useEffectiveSpot = (data: any, engineMode: string) => {
-    if (!data) return 0;
-    
-    // PRIORITY ORDER: WS spot_price → REST fallback → 0
-    // Handle multiple possible data structures
-    const wsSpotPrice = data?.wsLiveData?.spot_price || 
-                       data?.spot_price || 
-                       data?.optionChain?.spot_price ||
-                       data?.liveData?.spot_price;
-    
-    const restSpotPrice = data?.rest_spot_price || 
-                         data?.spot || 
-                         data?.optionChain?.spot;
-    
-    const effectiveSpot = wsSpotPrice || restSpotPrice || 0;
-    
-    // Determine source for logging
-    let source = 'UNKNOWN';
-    if (wsSpotPrice) source = 'WS';
+
+    const store = useWSStore.getState();
+
+    const wsSpot =
+        data?.liveData?.spot_price ??
+        store.liveData?.spot_price ??
+        store.optionChainSnapshot?.spot_price;
+
+    const restSpotPrice =
+        data?.spot_price ??
+        data?.spot ??
+        data?.optionChain?.spot_price ??
+        data?.optionChain?.spot;
+
+    const effectiveSpot = wsSpot ?? restSpotPrice ?? 0;
+
+    let source = 'DEFAULT';
+    if (wsSpot) source = 'WS';
     else if (restSpotPrice) source = 'REST';
-    else source = 'DEFAULT';
-    
+
     console.log(`🎯 Effective spot: ${effectiveSpot} (Mode: ${engineMode}, Source: ${source})`);
-    console.log(`🔍 Data structure check:`, {
-        wsLiveData: data?.wsLiveData,
-        spot_price: data?.spot_price,
-        optionChain: data?.optionChain,
-        liveData: data?.liveData
+    console.log(`🔍 Snapshot Cache:`, {
+        liveData: store.liveData?.spot_price,
+        snapshot: store.optionChainSnapshot?.spot_price
     });
-    
+
     return effectiveSpot;
 };
 
@@ -98,7 +115,7 @@ export const useEffectiveSpot = (data: any, engineMode: string) => {
 export const useSnapshotAnalytics = (engineMode: string, dataSource: string) => {
     const isSnapshotMode = engineMode === "SNAPSHOT" || engineMode === "HALTED";
     const isRestSource = dataSource === "rest_snapshot";
-    
+
     return {
         shouldUseSnapshot: isSnapshotMode && isRestSource,
         showSnapshotLabel: isSnapshotMode,
@@ -113,7 +130,7 @@ export const useSnapshotAnalytics = (engineMode: string, dataSource: string) => 
  */
 export const useTimeoutProtection = (engineMode: string) => {
     const shouldPreventTimeouts = engineMode !== "LIVE";
-    
+
     return {
         shouldPreventRetries: shouldPreventTimeouts,
         shouldPreventWSWait: shouldPreventTimeouts,

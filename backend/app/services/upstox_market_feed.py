@@ -19,10 +19,27 @@ from app.core.live_market_state import MarketStateManager
 from app.services.market_session_manager import get_market_session_manager, MarketSession, EngineMode, is_live_market
 from fastapi import HTTPException
 import httpx
-from app.services.upstox_protobuf_parser import parse_upstox_feed, FeedResponse
-from app.services.live_option_chain_builder import get_live_chain_builder
-
+from app.services.upstox_protobuf_parser import parse_upstox_feed
+from app.services.live_chain_builder_registry import get_live_chain_builder
 logger = logging.getLogger(__name__)
+
+def resolve_symbol_from_instrument(instrument_key: str) -> str:
+    if instrument_key.startswith("NSE_INDEX|Nifty"):
+        return "NIFTY"
+
+    if "BANKNIFTY" in instrument_key:
+        return "BANKNIFTY"
+
+    if "FINNIFTY" in instrument_key:
+        return "FINNIFTY"
+
+    if "MIDCPNIFTY" in instrument_key:
+        return "MIDCPNIFTY"
+
+    if "NIFTY" in instrument_key:
+        return "NIFTY"
+
+    return None
 
 # GLOBAL REGISTRY FOR SINGLETON FEEDS (Step 1 singleton)
 global_upstox_feeds: Dict[str, 'UpstoxMarketFeed'] = {}
@@ -48,6 +65,7 @@ class UpstoxMarketFeed:
     
     def __init__(self, config: FeedConfig, market_state: Optional[MarketStateManager] = None):
         self.config = config
+        self.active_symbol = config.symbol
         self.auth_service = get_upstox_auth_service()  # Use shared instance
         self.market_state = market_state or MarketStateManager()
         self.token_manager = get_token_manager()
@@ -472,9 +490,9 @@ class UpstoxMarketFeed:
         try:
             feeds = data.get("feeds", {})
             timestamp = data.get("currentTs")
-            
+
             for instrument_key, feed_data in feeds.items():
-                # Extract relevant data based on mode
+
                 processed_data = {
                     "instrument_key": instrument_key,
                     "timestamp": timestamp,
@@ -483,8 +501,8 @@ class UpstoxMarketFeed:
                     "ltq": feed_data.get("ltpc", {}).get("ltq"),
                     "cp": feed_data.get("ltpc", {}).get("cp"),
                 }
-                
-                # Add option greeks if available
+
+                # OPTION GREEKS
                 if "option_greeks" in feed_data:
                     greeks = feed_data["option_greeks"]
                     processed_data.update({
@@ -494,26 +512,36 @@ class UpstoxMarketFeed:
                         "vega": greeks.get("vega"),
                         "iv": greeks.get("iv")
                     })
-                
-                # Update market state using WebSocket-specific method
-                self.market_state.update_ws_tick_price(self.config.symbol, instrument_key, processed_data)
-                
-                # STEP 4: Trigger dynamic FO subscription boost on first index tick
-                if instrument_key == self.config.spot_instrument_key and not getattr(self, '_fo_boost_done', False):
+
+                # UPDATE MARKET STATE
+                self.market_state.update_ws_tick_price(
+                    self.config.symbol,
+                    instrument_key,
+                    processed_data
+                )
+
+                # 🚀 FO BOOST (FIRST INDEX TICK)
+                if (
+                    instrument_key == self.config.spot_instrument_key
+                    and not getattr(self, "_fo_boost_done", False)
+                ):
                     ltp = processed_data.get("ltp")
                     if ltp:
                         success = await self._subscribe_to_fo_options(ltp)
                         if not success:
                             logger.error(f"FO subscription failed for {self.config.symbol}")
-                            return
+                            continue
                         self._fo_boost_done = True
-                
-                # PUSH TO LIVE CHAIN BUILDER (Step 6 singleton)
-                # Map back to builder expected tick data format
+
+                # ======================================
+                # LIVE CHAIN BUILDER PUSH  ✅ FINAL FIX
+                # ======================================
+
                 tick_data = {
                     "instrument_key": instrument_key,
                     "ltp": processed_data.get("ltp"),
-                    "timestamp": processed_data.get("timestamp") or int(datetime.now().timestamp() * 1000),
+                    "timestamp": processed_data.get("timestamp")
+                        or int(datetime.now().timestamp() * 1000),
                     "oi": processed_data.get("oi"),
                     "volume": processed_data.get("volume"),
                     "delta": processed_data.get("delta"),
@@ -522,16 +550,29 @@ class UpstoxMarketFeed:
                     "vega": processed_data.get("vega"),
                     "iv": processed_data.get("iv")
                 }
-                
-                # Update latest_ticks for AI source (Step 6)
-                self.latest_ticks[instrument_key] = tick_data
-                
-                builder = get_live_chain_builder()
-                asyncio.create_task(builder.handle_tick(self.config.symbol, instrument_key, tick_data))
-                
-                logger.debug(f"Updated market state for {self.config.symbol} - {instrument_key}: LTP={processed_data.get('ltp')}")
 
-                
+                # AI latest tick cache
+                self.latest_ticks[instrument_key] = tick_data
+
+                # 🔥 RESOLVE SYMBOL FROM INSTRUMENT
+                symbol = resolve_symbol_from_instrument(instrument_key)
+
+                if not symbol:
+                    continue   # ❗ WAS RETURN → NOW FIXED
+
+                builder = get_live_chain_builder(symbol)
+
+                if not builder:
+                    continue   # ❗ SAFETY FIX
+
+                asyncio.create_task(
+                    builder.handle_tick(
+                        symbol,
+                        instrument_key,
+                        tick_data
+                    )
+                )
+
         except Exception as e:
             logger.error(f"Error processing live feed: {e}")
     
@@ -543,23 +584,27 @@ class UpstoxMarketFeed:
         try:
             if isinstance(message, bytes):
                 # Binary message -> Protobuf
-                feed_response = parse_upstox_feed(message)
-                if feed_response and feed_response.feeds:
-                    # Normalize FeedData objects into dicts for internal processing
+                ticks = parse_upstox_feed(message)
+                if ticks:
+                    # Convert tick list to feeds dict format for compatibility
                     feeds_dict = {}
-                    for feed in feed_response.feeds:
-                        feeds_dict[feed.instrument_key] = {
-                            "ltpc": {"ltp": feed.ltp},
-                            "oi": feed.oi,
-                            "volume": feed.volume,
-                            "option_greeks": {
-                                "delta": feed.delta,
-                                "gamma": feed.gamma,
-                                "theta": feed.theta,
-                                "vega": feed.vega,
-                                "iv": feed.iv
+                    for tick in ticks:
+                        instrument_key = tick.get("symbol")
+                        ltp = tick.get("ltp")
+                        if instrument_key and ltp:
+                            feeds_dict[instrument_key] = {
+                                "ltpc": {"ltp": ltp},
+                                "timestamp": tick.get("timestamp"),
+                                "oi": 0,  # Default values
+                                "volume": 0,
+                                "option_greeks": {
+                                    "delta": 0,
+                                    "gamma": 0,
+                                    "theta": 0,
+                                    "vega": 0,
+                                    "iv": 0
+                                }
                             }
-                        }
                         
                         # STEP 4: Ensure latest_ticks updated in message receive loop
                         # This happens in process_live_feed, but let's be explicit if needed.
@@ -748,7 +793,8 @@ class UpstoxMarketFeed:
                 pe_tsym = f"{sym}{yr_mon}{strike_str}PE"
                 
                 # Lookup numeric key from instruments.json cache
-                builder = get_live_chain_builder()
+                symbol = self.config.symbol
+                builder = get_live_chain_builder(symbol)
                 ce_key = builder.resolve_instrument_key(ce_tsym)
                 pe_key = builder.resolve_instrument_key(pe_tsym)
                 

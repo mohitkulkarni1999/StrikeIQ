@@ -1,60 +1,86 @@
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import RedirectResponse
+from app.services.token_manager import token_manager
 from app.services.upstox_auth_service import get_upstox_auth_service
-from app.core.config import settings
 import logging
 
 router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
 
 
+@router.get("/status")
+async def auth_status():
+    """
+    Production-grade authentication status check
+    Validates actual token by calling get_valid_token()
+    """
+    try:
+        # Attempt to get a valid token - this validates authentication
+        await token_manager.get_valid_token()
+        
+        # If we get here, token is valid
+        return {
+            "authenticated": True,
+            "login_url": None
+        }
+            
+    except HTTPException as e:
+        if e.status_code == 401:
+            # Authentication failed - return login URL
+            auth_service = get_upstox_auth_service()
+            login_url = auth_service.get_authorization_url()
+            
+            return {
+                "authenticated": False,
+                "login_url": login_url
+            }
+        else:
+            # Re-raise non-auth HTTP exceptions
+            raise
+            
+    except Exception as e:
+        logger.error(f"Auth status check failed: {str(e)}")
+        
+        # Treat any unexpected error as authentication failure
+        auth_service = get_upstox_auth_service()
+        login_url = auth_service.get_authorization_url()
+        
+        return {
+            "authenticated": False,
+            "login_url": login_url
+        }
+
+
 @router.get("/upstox")
-async def get_upstox_auth_url(request: Request):
+def login():
 
     auth_service = get_upstox_auth_service()
-    client_ip = auth_service._get_client_ip(request)
-
-    if not auth_service._check_rate_limit(client_ip):
-        raise HTTPException(status_code=429, detail="Too many requests")
-
-    state = auth_service.generate_signed_state()
-    auth_url = auth_service.get_authorization_url(state)
+    auth_url = auth_service.get_authorization_url()
 
     return RedirectResponse(auth_url)
 
 
 @router.get("/upstox/callback")
-async def upstox_auth_callback(
-    request: Request,
-    code: str = Query(None),
-    state: str = Query(None),
-):
-
+async def callback(code: str = Query(None)):
     auth_service = get_upstox_auth_service()
-    client_ip = auth_service._get_client_ip(request)
 
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code missing")
 
-    if not auth_service._check_rate_limit(client_ip):
-        raise HTTPException(status_code=429, detail="Too many requests")
-
-    logger.info(f"Received OAuth code: {code}, state: {state}")
-
-    # TEMPORARY: Bypass state validation for testing
-    # In production, this should be: if state and not auth_service.validate_signed_state(state):
-    if state and not auth_service.validate_signed_state(state):
-        logger.warning(f"Invalid state bypassed for testing: {state}")
-        # TEMPORARY: Bypass for testing - remove in production!
-        # raise HTTPException(status_code=400, detail="Invalid or expired state")
-
     try:
-        logger.info("Starting token exchange...")
-        result = auth_service.exchange_code_for_token(code)
-        logger.info(f"Token exchange successful: {result}")
+        logger.info("Exchanging authorization code...")
+        token_data = await auth_service.exchange_code_for_token(code)
+        
+        # Use TokenManager's public login method
+        await token_manager.login(
+            access_token=token_data["access_token"],
+            expires_in=token_data.get("expires_in", 3600)
+        )
+        
+        logger.info("Upstox connected successfully")
     except Exception as e:
         logger.error(f"Token exchange failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Token exchange failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
     return RedirectResponse(
         url="http://localhost:3000/auth/success?upstox=connected",

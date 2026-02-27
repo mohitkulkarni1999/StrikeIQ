@@ -46,7 +46,7 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
         });
       }
       setBackendState('ok');
-      scheduleNext(30_000); // Normal cadence when backend healthy
+      scheduleNext(10_000); // Normal cadence when backend healthy
     } catch {
       // Backend down / 500 / network error
       // ✅ Use warn not error — it's expected when backend is intentionally offline
