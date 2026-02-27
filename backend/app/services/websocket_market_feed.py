@@ -63,8 +63,6 @@ class WebSocketMarketFeed:
 
         self._client = httpx.AsyncClient(timeout=10)
 
-    # ================= START =================
-
     async def start(self):
 
         if self.running:
@@ -97,8 +95,6 @@ class WebSocketMarketFeed:
                 task.cancel()
 
         await asyncio.gather(*[t for t in tasks if t], return_exceptions=True)
-
-    # ================= CONNECT =================
 
     async def connect(self) -> bool:
 
@@ -152,8 +148,6 @@ class WebSocketMarketFeed:
 
             self._connecting = False
 
-    # ================= AUTHORIZE =================
-
     async def _authorize_feed(self, token: str) -> Optional[str]:
 
         headers = {
@@ -179,8 +173,6 @@ class WebSocketMarketFeed:
             logger.error(f"Authorize request failed: {e}")
             return None
 
-    # ================= SUBSCRIBE =================
-
     async def subscribe_indices(self):
 
         if not self.websocket:
@@ -200,25 +192,31 @@ class WebSocketMarketFeed:
 
         try:
             await self.websocket.send(json.dumps(payload))
-            logger.info(f"✅ INDEX SUBSCRIBED: {payload}")
+            logger.info("INDEX SUBSCRIBED")
         except Exception as e:
-            logger.error(f"❌ Subscribe failed: {e}")
-
-    # ================= HEARTBEAT =================
+            logger.error(f"Subscribe failed: {e}")
 
     async def _heartbeat(self):
 
         while self.running:
 
             try:
+
                 if self.websocket and self.is_connected:
                     await self.websocket.ping()
+
+                    await manager.broadcast_json(
+                        "market_data",
+                        {
+                            "type": "heartbeat",
+                            "timestamp": int(datetime.now().timestamp() * 1000)
+                        }
+                    )
+
             except Exception:
-                logger.warning("Heartbeat ping failed")
+                logger.warning("Heartbeat failed")
 
             await asyncio.sleep(10)
-
-    # ================= RECEIVE =================
 
     async def _recv_loop(self):
 
@@ -226,34 +224,23 @@ class WebSocketMarketFeed:
 
             try:
 
-                if not self.websocket:
-                    await asyncio.sleep(1)
-                    continue
-
                 message = await self.websocket.recv()
 
-                logger.info(f"📨 Received message from Upstox WS: {len(message)} bytes")
-
                 if isinstance(message, str):
-                    logger.info(f"📝 Received text message: {message}")
                     message = message.encode()
 
                 try:
                     self._message_queue.put_nowait(message)
-                    logger.debug(f"📤 Message queued successfully")
-
                 except asyncio.QueueFull:
-                    logger.warning("⚠️ WS queue full → dropping tick")
+                    logger.warning("WS queue full → dropping tick")
 
             except Exception as e:
 
-                logger.error(f"❌ Recv error → reconnecting: {e}")
+                logger.error(f"Recv error → reconnecting: {e}")
 
                 await self._handle_disconnect()
 
                 break
-
-    # ================= PROCESS =================
 
     async def _process_loop(self):
 
@@ -263,14 +250,18 @@ class WebSocketMarketFeed:
 
                 raw = await self._message_queue.get()
 
-                logger.info(f"🔄 Processing message from queue: {len(raw)} bytes")
-
                 ticks = await asyncio.to_thread(parse_upstox_feed, raw)
 
-                logger.info(f"📊 Parsed {len(ticks)} ticks from protobuf")
-
                 if not ticks:
-                    logger.debug("⚠️ No ticks to broadcast")
+
+                    await manager.broadcast_json(
+                        "market_data",
+                        {
+                            "type": "heartbeat",
+                            "timestamp": int(datetime.now().timestamp() * 1000)
+                        }
+                    )
+
                     continue
 
                 for tick in ticks:
@@ -279,32 +270,20 @@ class WebSocketMarketFeed:
                     ltp = tick.get("ltp")
 
                     if not instrument_key or ltp is None:
-                        logger.warning(f"⚠️ Invalid tick data: {tick}")
                         continue
 
                     symbol = resolve_symbol_from_instrument(instrument_key)
 
                     if not symbol:
-                        logger.warning(f"⚠️ Could not resolve symbol for: {instrument_key}")
                         continue
 
-                    logger.info(f"🎯 Broadcasting tick: {symbol} @ {ltp}")
-
-                    # 🔥 Broadcast to frontend
-                    try:
-
-                        await manager.broadcast_json(
-                            "market_data",
-                            {
-                                "type": "market_tick",
-                                "data": tick
-                            }
-                        )
-
-                        logger.info(f"✅ Successfully broadcasted tick for {symbol}")
-
-                    except Exception as e:
-                        logger.warning(f"❌ Broadcast skipped: {e}")
+                    await manager.broadcast_json(
+                        "market_data",
+                        {
+                            "type": "market_tick",
+                            "data": tick
+                        }
+                    )
 
                     tick_data = {
                         "instrument_key": instrument_key,
@@ -319,9 +298,7 @@ class WebSocketMarketFeed:
 
             except Exception as e:
 
-                logger.error(f"❌ Process error: {e}")
-
-    # ================= RECONNECT =================
+                logger.error(f"Process error: {e}")
 
     async def _handle_disconnect(self):
 
@@ -359,8 +336,6 @@ class WebSocketMarketFeed:
 
         await self._client.aclose()
 
-    # ================= ROUTE =================
-
     async def _route_tick_to_builders(self, symbol, instrument_key, tick_data):
 
         active_keys = [
@@ -387,9 +362,6 @@ class WebSocketMarketFeed:
             except Exception as e:
 
                 logger.error(f"Tick routing failed for {key}: {e}")
-
-
-# ================= FEED MANAGER =================
 
 
 class WebSocketFeedManager:
@@ -436,8 +408,6 @@ class WebSocketFeedManager:
                 self.feed = None
 
 
-# REQUIRED EXPORTS
 ws_feed_manager = WebSocketFeedManager()
 
-# backward compatibility instance
 websocket_market_feed = WebSocketMarketFeed()

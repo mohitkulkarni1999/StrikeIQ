@@ -48,7 +48,6 @@ export default function Navbar() {
 
   const connected = useWSStore((s) => s.connected);
   const marketStatus = useWSStore((s) => s.marketStatus);
-  const wsStatus = useWSStore((s) => s.wsStatus);
   const setMarketStatus = useWSStore((s) => s.setMarketStatus);
 
   const [backendAlive, setBackendAlive] = useState(true);
