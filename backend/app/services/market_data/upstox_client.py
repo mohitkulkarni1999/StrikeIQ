@@ -7,9 +7,12 @@ import time
 from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone, timedelta
 from ...core.config import settings
-from .types import InstrumentInfo, APIResponseError, AuthenticationError, TokenExpiredError
+from .types import InstrumentInfo, APIResponseError, AuthenticationError
 from app.utils.upstox_retry import retry_on_upstox_401
 from fastapi import HTTPException
+from app.services.upstox_auth_service import get_upstox_auth_service
+from typing import Optional
+from app.services.token_manager import token_manager
 
 logger = logging.getLogger(__name__)
 
@@ -147,57 +150,36 @@ class UpstoxClient:
             self._client = None
     
     @retry_on_upstox_401
-    async def _make_request(self, method: str, url: str, access_token: str, **kwargs) -> httpx.Response:
-        """Rate-limited request with 429 backoff"""
+    async def _make_request(self, method: str, url: str, **kwargs) -> httpx.Response:
+
         async with self._rate_limit:
-            # Defensive guard for rate limiting attributes
-            if not hasattr(self, "_last_request_time"):
-                self._last_request_time = 0.0
-            if not hasattr(self, "_min_delay"):
-                self._min_delay = 0.25
-            
-            # Rate limiting: minimum delay between requests
+
             current_time = time.time()
             time_since_last = current_time - self._last_request_time
             if time_since_last < self._min_delay:
                 await asyncio.sleep(self._min_delay - time_since_last)
-            
+
             self._last_request_time = time.time()
-            
+
+            access_token = await token_manager.get_valid_token()
+
             client = await self._get_client(access_token)
-            
-            # Convert method to lowercase for httpx compatibility
+
             method = method.lower()
-            request_fn = getattr(client, method, None)
-            
-            if not request_fn:
-                raise ValueError(f"Unsupported HTTP method: {method}")
-            
-            # Add defensive logging
-            logger.info("Upstox REST call: %s %s", method.upper(), url)
-            
+            request_fn = getattr(client, method)
+
             response = await request_fn(url, **kwargs)
-            
-            # Handle 429 rate limiting with exponential backoff
+
+            if response.status_code == 401:
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
+
             if response.status_code == 429:
-                logger.warning(f"Rate limited (429) - applying backoff")
-                
-                # Exponential backoff: 1s → 2s → 4s
-                backoff_time = min(1.0 * self._backoff_multiplier, 4.0)
-                self._backoff_multiplier = min(self._backoff_multiplier * 2, 8.0)
-                
-                logger.info(f"Waiting {backoff_time}s before retry (multiplier: {self._backoff_multiplier})")
-                await asyncio.sleep(backoff_time)
-                
-                # Retry the request
-                return await self._make_request(method, url, access_token, **kwargs)
-            
-            # Reset backoff on success
-            self._backoff_multiplier = 1.0
-            
-            return response
+                await asyncio.sleep(1)
+                return await request_fn(url, **kwargs)
+
+        return response
     
-    async def get_option_expiries(self, access_token: str, symbol: str) -> List[str]:
+    async def get_option_expiries(self, symbol: str) -> List[str]:
         """Get available expiry dates for symbol - WITH CACHING"""
         cache_key = self._get_cache_key(symbol, "expiry")
         
@@ -217,14 +199,13 @@ class UpstoxClient:
             response = await self._make_request(
                 'get',
                 f"https://api.upstox.com/v2/option/contract",
-                access_token=access_token,
                 params={
                     "instrument_key": instrument_key
                 }
             )
             
             if response.status_code == 401:
-                raise TokenExpiredError("Access token expired")
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
             elif response.status_code != 200:
                 raise APIResponseError(f"HTTP {response.status_code}: Failed to fetch option contracts")
             
@@ -283,7 +264,7 @@ class UpstoxClient:
             logger.info(f"Using emergency fallback expiries for {symbol}: {next_thursdays}")
             return next_thursdays
     
-    async def get_option_contracts(self, access_token: str, symbol: str) -> List[Dict[str, Any]]:
+    async def get_option_contracts(self, symbol: str) -> List[Dict[str, Any]]:
         """Get option contracts for index from local instruments file"""
         try:
             logger.info(f"Loading option contracts for {symbol} from local instruments")
@@ -309,11 +290,9 @@ class UpstoxClient:
             if not instruments_file.exists():
                 raise FileNotFoundError(f"Instruments file not found: {instruments_file}")
             
-            # Load instruments from file with format handling
             with open(instruments_file, 'r', encoding='utf-8') as f:
                 raw = json.load(f)
             
-            # Handle different instruments.json formats
             if isinstance(raw, dict) and "instruments" in raw:
                 instruments = raw["instruments"]
             elif isinstance(raw, list):
@@ -321,33 +300,55 @@ class UpstoxClient:
             else:
                 raise ValueError("Invalid instruments.json format")
             
-            # Filter and transform instruments to builder contract format
             symbol_upper = symbol.upper()
             contracts = []
             
             for instrument in instruments:
-                # Add type guard
+                
                 if not isinstance(instrument, dict):
                     continue
                     
-                # Filter for NSE_FO options matching the symbol
                 if (
                     instrument.get("segment") == "NSE_FO" and
                     instrument.get("name") == symbol_upper and
                     instrument.get("instrument_type") in ["CE", "PE"]
                 ):
-                    # Validate required fields
+                    
                     required_fields = ["strike_price", "expiry", "instrument_key"]
                     if not all(field in instrument for field in required_fields):
                         continue
                     
-                    # Transform to builder contract format
+                    # 🔥🔥🔥 EXPIRY NORMALIZATION FIX 🔥🔥🔥
+                    expiry_raw = instrument.get("expiry")
+
+                    try:
+                        # Case 1: YYYYMMDD int (20260226)
+                        if isinstance(expiry_raw, int) and len(str(expiry_raw)) == 8:
+                            expiry = datetime.strptime(
+                                str(expiry_raw),
+                                "%Y%m%d"
+                            ).strftime("%Y-%m-%d")
+
+                        # Case 2: Epoch millis
+                        elif isinstance(expiry_raw, (int, float)) and expiry_raw > 10**12:
+                            expiry = datetime.fromtimestamp(
+                                expiry_raw / 1000
+                            ).strftime("%Y-%m-%d")
+
+                        # Case 3: Already correct
+                        else:
+                            expiry = str(expiry_raw)
+
+                    except Exception:
+                        continue
+
                     contract = {
                         "strike": float(instrument["strike_price"]),
                         "option_type": instrument["instrument_type"],
-                        "expiry": instrument["expiry"],
+                        "expiry": expiry,
                         "instrument_key": instrument["instrument_key"]
                     }
+                    
                     contracts.append(contract)
             
             logger.info(f"Transformed {len(contracts)} contracts for {symbol}")
@@ -357,15 +358,14 @@ class UpstoxClient:
             logger.error(f"Failed to load contracts from instruments.json: {e}")
             raise
     
-    async def get_instruments(self, access_token: str) -> List[Dict[str, Any]]:
+    async def get_instruments(self) -> List[Dict[str, Any]]:
         """Get all instruments from Upstox API"""
         try:
             logger.info("Fetching instruments from Upstox API")
             
             response = await self._make_request(
                 "GET",
-                f"{self.base_url_v2}/instruments",
-                access_token
+                f"{self.base_url_v2}/instruments"
             )
             
             if response.status_code == 200:
@@ -374,8 +374,7 @@ class UpstoxClient:
                 logger.info(f"Retrieved {len(instruments)} instruments from Upstox API")
                 return instruments
             elif response.status_code == 401:
-                logger.error("Token expired while fetching instruments")
-                raise TokenExpiredError("Access token expired")
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
             elif response.status_code == 403:
                 logger.error("Access forbidden while fetching instruments")
                 raise AuthenticationError("Access forbidden")
@@ -387,32 +386,22 @@ class UpstoxClient:
             logger.exception(f"Exception while fetching instruments: {e}")
             raise APIResponseError(f"Failed to fetch instruments: {str(e)}")
     
-    async def get_option_chain(self, access_token: str, instrument_key: str, expiry_date: str = None) -> Dict[str, Any]:
+    async def get_option_chain(self, instrument_key: str, expiry_date: str = None) -> Dict[str, Any]:
         """Fetch option chain from Upstox API - WORKING ENDPOINT"""
         try:
-            logger.info(f"=== INVESTIGATION: get_option_chain called with instrument_key={instrument_key}, expiry={expiry_date} ===")
-            
             # Use WORKING option chain endpoint
             # Try without URL encoding first (like original working version)
             contracts_response = await self._make_request(
                 'get',
                 f"https://api.upstox.com/v2/option/chain",
-                access_token=access_token,
                 params={
                     "instrument_key": instrument_key,
                     "expiry_date": expiry_date
                 }
             )
             
-            logger.info(f"=== INVESTIGATION: Trying without URL encoding ===")
-            logger.info(f"=== INVESTIGATION: HTTP Status: {contracts_response.status_code} ===")
-            
-            # Debug logging to confirm status
-            print(f"DEBUG: Upstox API returning status: {contracts_response.status_code}")
-            
             if contracts_response.status_code == 401:
-                print(f"DEBUG: Upstox 401 detected - raising TokenExpiredError")
-                raise TokenExpiredError("Access token expired")
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
             elif contracts_response.status_code == 404:
                 logger.error(f"Upstox 404 error for option contracts: {contracts_response.text}")
                 raise APIResponseError(f"Invalid instrument or expiry: {instrument_key}, {expiry_date}")
@@ -422,10 +411,7 @@ class UpstoxClient:
             
             try:
                 contracts_data = contracts_response.json()
-                logger.info(f"=== INVESTIGATION: Option chain raw response type: {type(contracts_data)} ===")
-                logger.info(f"=== INVESTIGATION: Option chain raw response: {str(contracts_data)[:500]} ===")
             except HTTPException as e:
-                # Preserve original status (401, 403, etc.)
                 raise e
             except Exception as e:
                 logger.exception("Unexpected internal error parsing JSON")
@@ -433,28 +419,22 @@ class UpstoxClient:
                     status_code=500,
                     detail="Internal server error"
                 )
-            logger.info(f"=== INVESTIGATION: Raw JSON response type: {type(contracts_data)} ===")
-            logger.info(f"=== INVESTIGATION: Raw JSON response keys: {list(contracts_data.keys()) if isinstance(contracts_data, dict) else 'Not a dict'} ===")
             
             # Process the raw Upstox data into expected format
             if isinstance(contracts_data, dict) and "data" in contracts_data:
                 raw_data = contracts_data.get("data", [])
-                logger.info(f"=== INVESTIGATION: Extracted raw_data type: {type(raw_data)}, length: {len(raw_data) if isinstance(raw_data, list) else 'Not a list'} ===")
             else:
                 raw_data = contracts_data if isinstance(contracts_data, list) else []
-                logger.info(f"=== INVESTIGATION: Using contracts_data directly as raw_data, type: {type(raw_data)}, length: {len(raw_data) if isinstance(raw_data, list) else 'Not a list'} ===")
             
             # Handle the actual Upstox response structure (ARRAY of strikes)
             calls = []
             puts = []
             
             if isinstance(raw_data, list):
-                logger.info(f"=== INVESTIGATION: Processing {len(raw_data)} strike objects ===")
                 # Upstox returns an array of strike objects
                 for i, strike_data in enumerate(raw_data):
                     if isinstance(strike_data, dict):
                         strike_price = strike_data.get("strike_price", 0)
-                        logger.info(f"=== INVESTIGATION: Processing strike {i+1}: {strike_price} ===")
                         
                         # Process call options
                         call_opt = strike_data.get("call_options", {})
@@ -462,12 +442,11 @@ class UpstoxClient:
                             calls.append({
                                 "strike": strike_price,
                                 "oi": call_opt["market_data"].get("oi", 0),
-                                "ltp": call_opt["market_data"].get("ltp", 0),
+                                "ltp": call_opt["market_data"].get("ltp") or call_opt["market_data"].get("last_price") or call_opt["market_data"].get("last_traded_price") or 0,
                                 "volume": call_opt["market_data"].get("volume", 0),
                                 "iv": call_opt.get("option_greeks", {}).get("iv", 0),
                                 "change": call_opt["market_data"].get("oi", 0) - call_opt["market_data"].get("prev_oi", 0)
                             })
-                            logger.info(f"=== INVESTIGATION: Added call for strike {strike_price}: OI={call_opt['market_data'].get('oi', 0)} ===")
                         
                         # Process put options
                         put_opt = strike_data.get("put_options", {})
@@ -475,18 +454,11 @@ class UpstoxClient:
                             puts.append({
                                 "strike": strike_price,
                                 "oi": put_opt["market_data"].get("oi", 0),
-                                "ltp": put_opt["market_data"].get("ltp", 0),
+                                "ltp": put_opt["market_data"].get("ltp") or put_opt["market_data"].get("last_price") or put_opt["market_data"].get("last_traded_price") or 0,
                                 "volume": put_opt["market_data"].get("volume", 0),
                                 "iv": put_opt.get("option_greeks", {}).get("iv", 0),
                                 "change": put_opt["market_data"].get("oi", 0) - put_opt["market_data"].get("prev_oi", 0)
                             })
-                            logger.info(f"=== INVESTIGATION: Added put for strike {strike_price}: OI={put_opt['market_data'].get('oi', 0)} ===")
-                    else:
-                        logger.warning(f"=== INVESTIGATION: Strike {i+1} is not a dict: {type(strike_data)} ===")
-                else:
-                    logger.warning(f"=== INVESTIGATION: raw_data is not a list: {type(raw_data)} ===")
-            
-            logger.info(f"=== INVESTIGATION: Final counts - Calls: {len(calls)}, Puts: {len(puts)} ===")
             
             # Return processed option chain data
             # Extract symbol name from instrument_key (e.g., "NSE_INDEX|Nifty 50" -> "Nifty 50")
@@ -503,17 +475,10 @@ class UpstoxClient:
                 }
             }
             
-            logger.info(f"=== INVESTIGATION: Returning result with {len(calls)} calls and {len(puts)} puts ===")
             return result
         except httpx.RequestError as e:
             logger.error(f"Network error fetching option chain for {instrument_key}: {e}")
             raise APIResponseError(f"Network error: {e}")
-        except TokenExpiredError as e:
-            logger.error(f"Token expired fetching option chain for {instrument_key}: {e}")
-            raise HTTPException(status_code=401, detail="Upstox authentication required")
-        except APIResponseError as e:
-            logger.error(f"API error fetching option chain for {instrument_key}: {e}")
-            raise
         except HTTPException as e:
             # Preserve original status (401, 403, etc.)
             raise e
@@ -524,20 +489,19 @@ class UpstoxClient:
                 detail="Internal server error"
             )
 
-    async def get_option_greeks(self, access_token: str, instrument_key: str) -> Dict[str, Any]:
+    async def get_option_greeks(self, instrument_key: str) -> Dict[str, Any]:
         """Get option Greeks from Upstox API"""
         try:
             response = await self._make_request(
                 'get',
                 f"https://api.upstox.com/v3/market-quote/option-greek",
-                access_token=access_token,
                 params={
                     "instrument_key": instrument_key
                 }
             )
             
             if response.status_code == 401:
-                raise TokenExpiredError("Access token expired")
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
             elif response.status_code != 200:
                 logger.error(f"Upstox API error: {response.status_code} - {response.text}")
                 raise APIResponseError(f"HTTP {response.status_code}: {response.text}")
@@ -559,15 +523,12 @@ class UpstoxClient:
         except httpx.RequestError as e:
             logger.error(f"Network error fetching option Greeks for {instrument_key}: {e}")
             raise APIResponseError(f"Network error: {e}")
-        except TokenExpiredError as e:
-            logger.error(f"Token expired fetching option Greeks for {instrument_key}: {e}")
-            raise
-        except APIResponseError as e:
-            logger.error(f"API error fetching option Greeks for {instrument_key}: {e}")
-            raise
         except HTTPException as e:
             # Preserve original status (401, 403, etc.)
             raise e
+        except APIResponseError as e:
+            logger.error(f"API error fetching option Greeks for {instrument_key}: {e}")
+            raise
         except Exception as e:
             logger.exception("Unexpected internal error fetching option Greeks")
             raise HTTPException(
@@ -575,19 +536,18 @@ class UpstoxClient:
                 detail="Internal server error"
             )
     
-    async def get_market_quote(self, access_token: str, instrument_key: str) -> Dict[str, Any]:
+    async def get_market_quote(self, instrument_key: str) -> Dict[str, Any]:
         """Get market quote from Upstox API - WORKING ENDPOINT"""
         try:
             response = await self._make_request(
                 'get',
                 f"https://api.upstox.com/v2/market-quote/ltp",
-                access_token=access_token,
                 params={
                     "instrument_key": instrument_key
                 }
             )
             if response.status_code == 401:
-                raise TokenExpiredError("Access token expired")
+                raise HTTPException(status_code=401, detail="Upstox authentication required")
             elif response.status_code != 200:
                 logger.error(f"Upstox API error: {response.status_code} - {response.text}")
                 raise APIResponseError(f"HTTP {response.status_code}: {response.text}")
@@ -614,21 +574,48 @@ class UpstoxClient:
         except httpx.RequestError as e:
             logger.error(f"Network error fetching LTP for {instrument_key}: {e}")
             raise APIResponseError(f"Network error: {e}")
-        except TokenExpiredError as e:
-            logger.error(f"Token expired fetching quote for {instrument_key}: {e}")
-            raise  # Re-raise TokenExpiredError without changing it
         except HTTPException as e:
             # Preserve original status (401, 403, etc.)
             raise e
         except APIResponseError as e:
             logger.error(f"API error fetching quote for {instrument_key}: {e}")
-            raise  # Re-raise APIResponseError without changing it
+            raise
         except Exception as e:
             logger.exception("Unexpected internal error fetching quote")
             raise HTTPException(
                 status_code=500,
                 detail="Internal server error"
             )
+    async def get_ltp(self, instrument_key: str) -> Optional[float]:
+        """
+        Fetch latest LTP for index instrument (NIFTY / BANKNIFTY)
+        Used by LiveOptionChainBuilder REST fallback for ATM initialization
+        """
+        try:
+            
+            token = await token_manager.get_valid_token()
+
+            if not token:
+                logger.error("❌ No access token for LTP fetch")
+                return None
+
+            response = await self.get_market_quote(instrument_key)
+
+            if not response or "data" not in response:
+                logger.error(f"❌ Invalid LTP response for {instrument_key}")
+                return None
+
+            key = next(iter(response["data"]))
+            ltp = response["data"][key].get("last_price")
+
+            if ltp:
+                return float(ltp)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"❌ LTP REST ERROR for {instrument_key}: {e}")
+            return None
 
     async def _log_final_response(self, response_data: Dict[str, Any]) -> None:
         """Log final backend response for forensic audit"""

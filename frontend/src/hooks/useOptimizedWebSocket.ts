@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useWSStore } from '../core/ws/wsStore';
 
 // Types for optimized WebSocket
 interface OptimizedWebSocketMessage {
@@ -73,7 +74,9 @@ export function useOptimizedWebSocket(url: string): UseOptimizedWebSocketReturn 
         connectionAttempts: prev.connectionAttempts + 1
       }));
       
-      const ws = new WebSocket(url);
+      // Use global store instead of creating WebSocket
+      const { connect } = useWSStore();
+      const ws = connect('', ''); // Pass empty params since this function expects URL
       wsRef.current = ws;
       
       ws.onopen = () => {
@@ -172,7 +175,7 @@ export function useOptimizedWebSocket(url: string): UseOptimizedWebSocketReturn 
           
           reconnectTimeoutRef.current = setTimeout(() => {
             if (mountedRef.current) {
-              connect();
+              connect('', ''); // Pass empty params
             }
           }, delay);
         }

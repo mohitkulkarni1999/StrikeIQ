@@ -29,37 +29,26 @@ export async function initWebSocketOnce(): Promise<WSInitResponse> {
   try {
     console.log('🔒 WS Init: Starting single WebSocket initialization');
 
-    const response = await fetch('/api/ws/init', {
-      method: 'GET',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    });
+    const response = await fetch('/api/ws/init');
 
     if (!response.ok) {
-      // 500 most commonly means the backend already has an active session
-      // (e.g. after a browser tab refresh the sessionStorage is cleared but
-      // the backend still holds the connection). Treat this as "already up".
-      if (response.status === 500 || response.status === 409) {
-        console.warn(
-          `🔒 WS Init: Backend returned ${response.status} — session likely already active, proceeding.`
-        );
-        markWSInitialized();
-        return { status: 'connected', message: 'Session already active on backend' };
-      }
-
-      // For real client errors (401, 403, 400...) fail fast so the user knows
-      throw new Error(`WS Init failed: ${response.status} ${response.statusText}`);
+      console.warn('🔒 WS Init HTTP error', response.status);
+      return null;
     }
 
-    const data: WSInitResponse = await response.json();
+    const data = await response.json();
+
+    if (!data || typeof data !== "object") {
+      console.warn('🔒 WS Init invalid response', data);
+      return null;
+    }
 
     if (data.status === 'success' || data.status === 'connected') {
       console.log('🔒 WS Init: Successfully initialized WebSocket session');
       return data;
     } else {
-      throw new Error(data.message || 'WS Init returned error status');
+      console.warn('🔒 WS Init returned non-success', data);
+      return null;
     }
   } catch (error) {
     console.error('🔒 WS Init: Initialization failed', error);
@@ -90,8 +79,8 @@ export function markWSInitialized(): void {
 }
 
 /**
- * Clear the initialized flag so the next connect() attempt
- * goes through the full init flow (used by the recovery poller)
+ * Clear initialized flag so next connect() attempt
+ * goes through the full init flow (used by recovery poller)
  */
 export function clearWSInitialized(): void {
   sessionStorage.removeItem('ws_initialized');

@@ -1,16 +1,10 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { AlertCircle, TrendingUp, TrendingDown, Target } from 'lucide-react';
+import { safeMapBiasData, FrontendBiasData } from '../utils/biasMapping';
 
 interface SignalCardsProps {
   intelligence?: {
-    bias: {
-      score: number;
-      label: string;
-      strength: number;
-      direction: string;
-      confidence: number;
-      signal: string;
-    };
+    bias: any; // Raw backend data
     probability?: {
       expected_move: number;
       upper_1sd: number;
@@ -31,8 +25,18 @@ interface SignalCardsProps {
   };
 }
 
-export default function SignalCards({ intelligence }: SignalCardsProps) {
-  console.log('🔍 SignalCards - Received intelligence:', intelligence);
+function SignalCards({ intelligence }: SignalCardsProps) {
+  // Map backend bias data to frontend interface
+  const biasData: FrontendBiasData = intelligence?.bias 
+    ? safeMapBiasData(intelligence.bias)
+    : {
+        score: 0,
+        label: 'NEUTRAL',
+        confidence: 0,
+        signal: 'NEUTRAL',
+        direction: 'NONE',
+        strength: 0
+      };
   
   if (!intelligence) {
     return (
@@ -50,15 +54,15 @@ export default function SignalCards({ intelligence }: SignalCardsProps) {
   const signalCards = [
     {
       title: 'Bias Signal',
-      signal: bias?.signal || 'NEUTRAL',
-      strength: bias?.strength || 'UNKNOWN',
-      confidence: bias?.confidence || 0,
-      icon: bias?.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
-             bias?.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
+      signal: biasData.signal || 'NEUTRAL',
+      strength: biasData.strength > 0.7 ? 'STRONG' : biasData.strength > 0.4 ? 'MODERATE' : 'WEAK',
+      confidence: biasData.confidence || 0,
+      icon: biasData.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
+             biasData.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
              <Target className="w-6 h-6" />,
-      color: bias?.label?.toUpperCase() === 'BULLISH' ? 'success' : 
-             bias?.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
-      description: `Market bias indicates ${bias?.label?.toString().toLowerCase() || 'neutral'} sentiment with ${bias?.strength?.toString().toLowerCase() || 'unknown'} conviction.`
+      color: biasData.label?.toUpperCase() === 'BULLISH' ? 'success' : 
+             biasData.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
+      description: `Market bias indicates ${biasData.label?.toString().toLowerCase() || 'neutral'} sentiment with ${biasData.strength > 0.7 ? 'strong' : biasData.strength > 0.4 ? 'moderate' : 'weak'} conviction.`
     },
     {
       title: 'Expected Move Signal',
@@ -86,15 +90,15 @@ export default function SignalCards({ intelligence }: SignalCardsProps) {
     },
     {
       title: 'Overall Signal',
-      signal: bias?.signal || 'NEUTRAL',
-      strength: bias?.strength || 'UNKNOWN',
-      confidence: bias?.confidence || 0,
-      icon: bias?.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
-             bias?.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
+      signal: biasData.signal || 'NEUTRAL',
+      strength: biasData.strength > 0.7 ? 'STRONG' : biasData.strength > 0.4 ? 'MODERATE' : 'WEAK',
+      confidence: biasData.confidence || 0,
+      icon: biasData.label?.toUpperCase() === 'BULLISH' ? <TrendingUp className="w-6 h-6" /> : 
+             biasData.label?.toUpperCase() === 'BEARISH' ? <TrendingDown className="w-6 h-6" /> : 
              <Target className="w-6 h-6" />,
-      color: bias?.label?.toUpperCase() === 'BULLISH' ? 'success' : 
-             bias?.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
-      description: `Overall market bias is ${bias?.label?.toLowerCase() || 'neutral'} with ${bias?.confidence?.toFixed(1) || '0.0'}% confidence.`
+      color: biasData.label?.toUpperCase() === 'BULLISH' ? 'success' : 
+             biasData.label?.toUpperCase() === 'BEARISH' ? 'danger' : 'warning',
+      description: `Overall market bias is ${biasData.label?.toLowerCase() || 'neutral'} with ${biasData.confidence?.toFixed(1) || '0.0'}% confidence.`
     }
   ];
 
@@ -147,7 +151,7 @@ export default function SignalCards({ intelligence }: SignalCardsProps) {
               <div>
                 <div className="flex justify-between text-sm mb-1">
                   <span className="text-muted-foreground">Strength</span>
-                  <span className="font-medium capitalize">{typeof card.strength === 'string' ? card.strength.toLowerCase() : card.strength.toString()}</span>
+                  <span className="font-medium capitalize">{typeof card.strength === 'string' ? card.strength.toLowerCase() : String(card.strength)}</span>
                 </div>
                 <div className="w-full bg-black/30 rounded-full h-2">
                   <div
@@ -184,3 +188,5 @@ export default function SignalCards({ intelligence }: SignalCardsProps) {
     </div>
   );
 }
+
+export default memo(SignalCards);

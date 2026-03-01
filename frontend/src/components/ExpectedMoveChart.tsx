@@ -41,6 +41,8 @@ const ExpectedMoveChart: React.FC<ExpectedMoveChartProps> = ({ probability }) =>
         return 'text-[#FF4D4F] bg-[#FF4D4F]/10 border-[#FF4D4F]/30';
       case 'underpriced':
         return 'text-[#00FF9F] bg-[#00FF9F]/10 border-[#00FF9F]/30';
+      case 'fair':
+        return 'text-[#4F8CFF] bg-[#4F8CFF]/10 border-[#4F8CFF]/30';
       default:
         return 'text-[#4F8CFF] bg-[#4F8CFF]/10 border-[#4F8CFF]/30';
     }
@@ -53,6 +55,8 @@ const ExpectedMoveChart: React.FC<ExpectedMoveChartProps> = ({ probability }) =>
         return <ArrowUp className="w-4 h-4" />;
       case 'underpriced':
         return <ArrowDown className="w-4 h-4" />;
+      case 'fair':
+        return <Target className="w-4 h-4" />;
       default:
         return <Target className="w-4 h-4" />;
     }

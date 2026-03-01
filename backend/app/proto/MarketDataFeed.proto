@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package com.upstox.marketdata;
+
+message FeedResponse {
+  map<string, Feed> feeds = 1;
+}
+
+message Feed {
+  FF ff = 1;
+}
+
+message FF {
+  IndexFF indexFF = 1;
+}
+
+message IndexFF {
+  LTPC ltpc = 1;
+}
+
+message LTPC {
+  double ltp = 1;
+}

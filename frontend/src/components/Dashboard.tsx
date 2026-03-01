@@ -3,9 +3,11 @@
 import React, { useState, useEffect, memo } from 'react';
 import { Activity, Database } from 'lucide-react';
 import { useLiveMarketData } from '../hooks/useLiveMarketData';
+import { useExpirySelector } from '../hooks/useExpirySelector';
 import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
 import DebugBadge from './DebugBadge';
 import AIInterpretationPanel from './AIInterpretationPanel';
+import AICommandCenter from './AICommandCenter';
 import OIHeatmap from './OIHeatmap';
 import AlertPanelFinal from './intelligence/AlertPanelFinal';
 
@@ -21,17 +23,26 @@ import { CARD } from './dashboard/DashboardTypes';
 const MemoizedOIHeatmap = memo(OIHeatmap);
 const MemoizedAIPanel = memo(AIInterpretationPanel);
 const MemoizedAlerts = memo(AlertPanelFinal);
+const MemoizedAICommandCenter = memo(AICommandCenter);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 interface DashboardProps { initialSymbol?: string; }
 
 export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
   const [symbol] = useState(initialSymbol);
-  const [expiryList, setExpiryList] = useState<string[]>([]);
-  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
 
-  const { data, status, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
+  // Use expiry selector hook
+  const {
+    expiryList,
+    selectedExpiry,
+    loadingExpiries,
+    expiryError,
+    handleExpiryChange,
+    optionChainConnected
+  } = useExpirySelector(symbol);
 
+  const { data, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
+  
   const isLiveMode = useModeGuard(mode, 'LIVE');
   const isSnapshotMode = useModeGuard(mode, 'SNAPSHOT');
   const effectiveSpot = useEffectiveSpot(data, mode);
@@ -46,13 +57,71 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
     }
   }, [mode]);
 
-  // Populate expiry list from data
-  useEffect(() => {
-    if (data?.available_expiries && data.available_expiries.length > 0) {
-      setExpiryList(data.available_expiries);
-      if (!selectedExpiry) setSelectedExpiry(data.available_expiries[0]);
-    }
-  }, [data?.available_expiries, selectedExpiry]);
+  // Add dashboard card styles
+  React.useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      .trading-panel {
+        background: rgba(255,255,255,0.04);
+        border-radius: 12px;
+        border: 1px solid rgba(255,255,255,0.08);
+        padding: 16px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+        transition: all 0.3s ease;
+        position: relative;
+        overflow: hidden;
+      }
+      
+      .trading-panel::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 1px;
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+        opacity: 0;
+        transition: opacity 0.3s ease;
+      }
+      
+      .trading-panel:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+        border-color: rgba(255,255,255,0.12);
+      }
+      
+      .trading-panel:hover::before {
+        opacity: 1;
+      }
+      
+      .full-width {
+        grid-column: 1 / -1;
+      }
+      
+      /* Typography System */
+      .panel-title {
+        font-size: 14px;
+        font-weight: 600;
+        color: white;
+      }
+      
+      .panel-value {
+        font-size: 18px;
+        font-weight: 700;
+        color: white;
+      }
+      
+      @media (max-width: 768px) {
+        .dashboard-grid {
+          grid-template-columns: 1fr !important;
+        }
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
 
   const safeError = typeof error === 'string' ? error : null;
   const modeLabel = mode === 'live' ? 'LIVE' : mode === 'snapshot' ? 'SNAPSHOT' : mode === 'error' ? 'HALTED' : 'OFFLINE';
@@ -79,117 +148,85 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
         }}
       />
 
-      <div className="relative z-10 max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6 space-y-4">
+      <div className="relative z-10 max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6">
+        <div className="dashboard-grid" style={{
+          display: 'grid',
+          gridTemplateColumns: '1fr 1fr',
+          gap: '20px'
+        }}>
 
-        {/* ROW 1 — Ticker strip */}
-        <TickerStrip
-          symbol={symbol}
-          data={data}
-          effectiveSpot={effectiveSpot}
-          mode={mode}
-          status={status}
-          modeLabel={modeLabel}
-          modeColor={modeColor}
-        />
-
-        {/* ROW 2 — Four stat cards */}
-        <StatCardsRow data={data} isAnalyticsEnabled={isAnalyticsEnabled} />
-
-        {/* ROW 3 — Market Bias + Expected Move */}
-        <BiasAndMove data={data} isSnapshotMode={isSnapshotMode} />
-
-        {/* ROW 4 — Smart Money + Liquidity */}
-        <SmartMoneyAndLiquidity
-          data={data}
-          isLiveMode={isLiveMode}
-          isSnapshotMode={isSnapshotMode}
-          mode={mode}
-        />
-
-        {/* ── Snapshot banner ─────────────────────────────────────────────── */}
-        {isSnapshotMode && (
-          <div
-            className="rounded-2xl px-5 py-4 flex items-center gap-4"
-            style={{ background: 'rgba(59,130,246,0.06)', border: '1px solid rgba(59,130,246,0.18)' }}
-          >
-            <div
-              className="shrink-0 w-9 h-9 rounded-xl flex items-center justify-center"
-              style={{ background: 'rgba(59,130,246,0.12)', border: '1px solid rgba(59,130,246,0.22)' }}
-            >
-              <Database className="w-4 h-4 text-blue-400" />
-            </div>
-            <div>
-              <div className="text-xs font-mono font-bold text-blue-400 tracking-wide">SNAPSHOT MODE — Market Closed</div>
-              <div className="text-[10px] font-mono mt-0.5" style={{ color: 'rgba(96,165,250,0.55)' }}>
-                Displaying last available EOD snapshot. Live data resumes at market open.
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Expiry selector ─────────────────────────────────────────────── */}
-        {expiryList.length > 0 && (
-          <div className="rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3" style={CARD}>
-            <label
-              className="text-[10px] font-mono font-bold tracking-widest uppercase whitespace-nowrap shrink-0"
-              style={{ color: 'rgba(148,163,184,0.55)' }}
-            >
-              Expiry Date
-            </label>
-            <select
-              value={selectedExpiry || ''}
-              onChange={(e) => setSelectedExpiry(e.target.value)}
-              className="flex-1 text-white text-sm font-mono px-3 py-2 rounded-xl outline-none transition-all cursor-pointer"
-              style={{ background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(0,229,255,0.15)', color: '#e2e8f0' }}
-            >
-              {expiryList.map((exp) => (
-                <option key={exp} value={exp}>{exp}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* ── Option Chain panel ─────────────────────────────────────────── */}
-        <div id="section-chain" className="rounded-2xl overflow-hidden scroll-mt-20" style={CARD}>
-          <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(99,102,241,0.5), transparent)' }} />
-          <div className="p-4 sm:p-5">
-            <div className="flex items-center justify-between mb-3">
-              <div className="text-[10px] font-bold tracking-[0.20em] uppercase mb-1" style={{ color: 'rgba(148,163,184,0.55)', fontFamily: "'JetBrains Mono', monospace" }}>
-                Option Chain
-              </div>
-              {data?.optionChain && (
-                <span className="text-[10px] font-mono" style={{ color: 'rgba(148,163,184,0.45)' }}>
-                  {data.optionChain.calls?.length ?? 0}CE · {data.optionChain.puts?.length ?? 0}PE
-                </span>
-              )}
-            </div>
-            {data?.optionChain ? (
-              <div className="text-xs font-mono" style={{ color: 'rgba(148,163,184,0.6)' }}>
-                Option Chain Data Available — {data.optionChain.calls?.length ?? 0} calls, {data.optionChain.puts?.length ?? 0} puts
-              </div>
-            ) : (
-              <div className="flex items-center justify-center py-6" style={{ color: 'rgba(148,163,184,0.3)' }}>
-                <Activity className="w-5 h-5 mr-2" />
-                <span className="text-xs font-mono">Awaiting data…</span>
-              </div>
-            )}
+        {/* ROW 1 — Ticker strip (full width) */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel">
+            <TickerStrip
+              symbol={symbol}
+              data={data}
+              effectiveSpot={effectiveSpot}
+              mode={mode}
+              modeLabel={modeLabel}
+              modeColor={modeColor}
+            />
           </div>
         </div>
 
-        {/* ── OI Heatmap ─────────────────────────────────────────────────── */}
-        <div className="rounded-2xl overflow-hidden" style={CARD}>
-          <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.40), transparent)' }} />
-          <div className="p-4 sm:p-5">
-            <MemoizedOIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
+        {/* ROW 2 — Four stat cards (full width) */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel">
+            <StatCardsRow data={data} isAnalyticsEnabled={isAnalyticsEnabled} />
           </div>
         </div>
 
-        {/* ── AI Panel + Alerts ──────────────────────────────────────────── */}
-        <div id="section-alerts" className="scroll-mt-20" />
-        <DebugBadge className="mb-1" />
-        <MemoizedAIPanel intelligence={data?.intelligence ?? null} />
-        <MemoizedAlerts alerts={data?.alerts || []} />
+        {/* ROW 3 — Alert Panel (compact) */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel" style={{ minHeight: '120px' }}>
+            <MemoizedAlerts alerts={(data as any)?.alerts || []} />
+          </div>
+        </div>
 
+        {/* ROW 4 — Market Bias + Expected Move | Smart Money + Liquidity */}
+        <div className="trading-panel">
+          <BiasAndMove data={data} isSnapshotMode={isSnapshotMode} />
+        </div>
+
+        <div className="trading-panel">
+          <SmartMoneyAndLiquidity
+            data={data}
+            isLiveMode={isLiveMode}
+            isSnapshotMode={isSnapshotMode}
+            mode={mode}
+          />
+        </div>
+
+        
+        {/* ROW 5 — OI Heatmap (full width horizontal scroll) */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel">
+            <div id="oi-heatmap" className="rounded-2xl overflow-x-auto" style={CARD}>
+              <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.40), transparent)' }} />
+              <div className="p-4 sm:p-5 min-w-[800px]">
+                <MemoizedOIHeatmap symbol={symbol} />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* ROW 7 — AI Interpretation Panel */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel">
+            <div id="section-ai" className="scroll-mt-20" />
+            <DebugBadge className="mb-1" />
+            <MemoizedAIPanel intelligence={data?.intelligence ?? null} />
+          </div>
+        </div>
+
+        {/* ROW 8 — AI Command Center */}
+        <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel">
+            <MemoizedAICommandCenter />
+          </div>
+        </div>
+
+        </div>
       </div>
     </div>
   );

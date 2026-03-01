@@ -1,23 +1,15 @@
 import React, { memo, useMemo, useCallback, useState } from 'react';
 import { FixedSizeList } from 'react-window';
 import { OptionChainData } from '@/types/dashboard';
+import { useWSStore } from '@/core/ws/wsStore';
 
 interface VirtualizedOptionChainProps {
   optionChainData: OptionChainData;
 }
 
 // Row component for virtualized list
-const OptionRow = memo(({
-  index,
-  style,
-  data
-}: {
-  index: number;
-  style: React.CSSProperties;
-  data: any;
-}) => {
+const OptionRow = memo(({ index, style, data }: any) => {
   const item = data[index];
-
   if (!item) return null;
 
   return (
@@ -44,117 +36,72 @@ const OptionRow = memo(({
 OptionRow.displayName = 'OptionRow';
 
 const VirtualizedOptionChain: React.FC<VirtualizedOptionChainProps> = memo(({ optionChainData }) => {
+
   const [selectedType, setSelectedType] = useState<'calls' | 'puts' | 'both'>('both');
 
-  // Memoized data processing
+  // ✅ REACTIVE WS STORE SUBSCRIPTION (CRITICAL FIX)
+  const wsLiveData = useWSStore(state => state.liveData);
+  const wsSnapshot = useWSStore(state => state.optionChainSnapshot);
+
+  // ✅ PATCH: Validate REST data structure before using it (empty arrays are truthy)
+  const hasValidRest =
+    optionChainData &&
+    optionChainData.calls &&
+    optionChainData.puts &&
+    optionChainData.calls.length > 0;
+
+  const actualLiveData =
+    hasValidRest
+      ? optionChainData
+      : wsLiveData ?? wsSnapshot ?? null;
+
+  // ✅ THIS WILL NOW RE-RUN ON WS PAYLOAD
   const processedData = useMemo(() => {
-    if (!optionChainData) return { calls: [], puts: [], combined: [] };
 
-    const calls = optionChainData.calls || [];
-    const puts = optionChainData.puts || [];
+    if (!actualLiveData) return { calls: [], puts: [], combined: [] };
 
-    // Process calls
-    const processedCalls = calls.map(call => ({
-      strike: call.strike,
-      call_oi: call.open_interest || 0,
-      put_oi: 0,
-      total_oi: call.open_interest || 0,
-      oi_concentration: 0, // Would calculate from total
-      type: 'call' as const,
-      ltp: call.ltp || 0,
-      change: call.change || 0,
-      volume: call.volume || 0
-    }));
+    const calls = actualLiveData.calls || [];
+    const puts = actualLiveData.puts || [];
 
-    // Process puts
-    const processedPuts = puts.map(put => ({
-      strike: put.strike,
-      call_oi: 0,
-      put_oi: put.open_interest || 0,
-      total_oi: put.open_interest || 0,
-      oi_concentration: 0, // Would calculate from total
-      type: 'put' as const,
-      ltp: put.ltp || 0,
-      change: put.change || 0,
-      volume: put.volume || 0
-    }));
-
-    // Combine for unified view
-    const combined = [];
     const strikeMap = new Map();
 
-    // Add calls to map
-    processedCalls.forEach(call => {
-      const existing = strikeMap.get(call.strike) || { strike: call.strike, call_oi: 0, put_oi: 0, total_oi: 0 };
-      strikeMap.set(call.strike, {
+    calls.forEach((c: any) => {
+      const existing = strikeMap.get(c.strike) || { strike: c.strike, call_oi: 0, put_oi: 0, total_oi: 0 };
+      strikeMap.set(c.strike, {
         ...existing,
-        call_oi: call.call_oi,
-        total_oi: existing.total_oi + call.call_oi
+        call_oi: c.open_interest || 0,
+        total_oi: existing.total_oi + (c.open_interest || 0)
       });
     });
 
-    // Add puts to map
-    processedPuts.forEach(put => {
-      const existing = strikeMap.get(put.strike) || { strike: put.strike, call_oi: 0, put_oi: 0, total_oi: 0 };
-      strikeMap.set(put.strike, {
+    puts.forEach((p: any) => {
+      const existing = strikeMap.get(p.strike) || { strike: p.strike, call_oi: 0, put_oi: 0, total_oi: 0 };
+      strikeMap.set(p.strike, {
         ...existing,
-        put_oi: put.put_oi,
-        total_oi: existing.total_oi + put.put_oi
+        put_oi: p.open_interest || 0,
+        total_oi: existing.total_oi + (p.open_interest || 0)
       });
     });
 
-    // Convert map to array and calculate concentrations
-    const totalOI = Array.from(strikeMap.values()).reduce((sum, item) => sum + item.total_oi, 0);
+    const totalOI = Array.from(strikeMap.values()).reduce((s: any, i: any) => s + i.total_oi, 0);
 
-    strikeMap.forEach((value, key) => {
-      value.oi_concentration = totalOI > 0 ? (value.total_oi / totalOI) * 100 : 0;
-      combined.push(value);
-    });
+    const combined = Array.from(strikeMap.values()).map((v: any) => ({
+      ...v,
+      oi_concentration: totalOI > 0 ? (v.total_oi / totalOI) * 100 : 0
+    })).sort((a: any, b: any) => a.strike - b.strike);
 
-    // Sort by strike
-    combined.sort((a, b) => a.strike - b.strike);
+    return { combined };
 
-    return {
-      calls: processedCalls,
-      puts: processedPuts,
-      combined
-    };
-  }, [optionChainData]);
+  }, [optionChainData, wsLiveData, wsSnapshot]);  // 🔥 IMPORTANT
 
-  // Filter data based on selected type
-  const filteredData = useMemo(() => {
-    switch (selectedType) {
-      case 'calls':
-        return processedData.calls;
-      case 'puts':
-        return processedData.puts;
-      case 'both':
-      default:
-        return processedData.combined;
-    }
-  }, [processedData, selectedType]);
+  const filteredData = useMemo(() => processedData.combined, [processedData]);
 
-  // Memoized item renderer
-  const RowRenderer = useCallback(({ index, style }) => {
-    return (
-      <OptionRow
-        index={index}
-        style={style}
-        data={filteredData}
-      />
-    );
-  }, [filteredData]);
-
-  // Memoized item size getter
-  const getItemSize = useCallback(() => 32, []); // 32px per row
-
-  // Memoized item key getter
   const getItemKey = useCallback((index: number) => {
     const item = filteredData[index];
-    return `${item.strike}-${item.type}`;
+    return `${item.strike}`;
   }, [filteredData]);
 
-  if (!optionChainData || filteredData.length === 0) {
+  if (!actualLiveData || filteredData.length === 0) {
     return (
       <div className="bg-[#111827] border border-[#1F2937] rounded-xl p-8 text-center">
         <div className="text-gray-400">No option chain data available</div>
@@ -164,43 +111,10 @@ const VirtualizedOptionChain: React.FC<VirtualizedOptionChainProps> = memo(({ op
 
   return (
     <div className="bg-[#111827] border border-[#1F2937] rounded-xl p-4">
-      {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-white">Option Chain</h3>
-
-        {/* Filter buttons */}
-        <div className="flex gap-2">
-          <button
-            onClick={() => setSelectedType('both')}
-            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedType === 'both'
-              ? 'bg-blue-500 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-          >
-            Both
-          </button>
-          <button
-            onClick={() => setSelectedType('calls')}
-            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedType === 'calls'
-              ? 'bg-red-500 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-          >
-            Calls
-          </button>
-          <button
-            onClick={() => setSelectedType('puts')}
-            className={`px-3 py-1 rounded text-xs font-medium transition-colors ${selectedType === 'puts'
-              ? 'bg-green-500 text-white'
-              : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
-              }`}
-          >
-            Puts
-          </button>
-        </div>
       </div>
 
-      {/* Column headers */}
       <div className="flex items-center border-b border-gray-700 pb-2 mb-2">
         <div className="flex-1 text-xs font-bold text-gray-400 px-2">Strike</div>
         <div className="w-24 text-xs font-bold text-red-400 px-2 text-right">Call OI</div>
@@ -209,27 +123,23 @@ const VirtualizedOptionChain: React.FC<VirtualizedOptionChainProps> = memo(({ op
         <div className="w-20 text-xs font-bold text-gray-400 px-2 text-right">Conc</div>
       </div>
 
-      {/* Virtualized list */}
       <div className="border border-gray-800 rounded">
         <FixedSizeList
-          height={400} // Fixed height for virtualization
+          height={400}
+          width="100%"
           itemCount={filteredData.length}
-          itemSize={getItemSize()}
+          itemSize={32}
           itemData={filteredData}
           itemKey={getItemKey}
-          children={RowRenderer}
-          overscanCount={5} // Render 5 extra items above/below
-        />
-      </div>
-
-      {/* Footer with stats */}
-      <div className="mt-4 text-xs text-gray-400 text-center">
-        Showing {filteredData.length} strikes • Virtual rendering enabled
+        >
+          {({ index, style }: any) => (
+            <OptionRow index={index} style={style} data={filteredData} />
+          )}
+        </FixedSizeList>
       </div>
     </div>
   );
 });
 
 VirtualizedOptionChain.displayName = 'VirtualizedOptionChain';
-
 export default VirtualizedOptionChain;

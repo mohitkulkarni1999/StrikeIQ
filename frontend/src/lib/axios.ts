@@ -2,53 +2,36 @@ import axios from "axios"
 
 // Create axios instance with default config
 const api = axios.create({
-  baseURL: "", // Default to Next.js route, which rewrites to http://localhost:8000
-  timeout: 10000,
-  headers: {
-    "Content-Type": "application/json",
-  },
+  baseURL: "http://localhost:8000",
+  timeout: 5000
 })
 
-// Request interceptor
-api.interceptors.request.use(
-  (config) => {
-    // Add any request modifications here if needed
-    return config
-  },
-  (error) => {
-    return Promise.reject(error)
-  }
-)
-
-// Response interceptor for handling 401 errors
 api.interceptors.response.use(
-  (response) => {
-    // Any status code that lies within the range of 2xx causes this function to trigger
-    return response
-  },
+  (response) => response,
   (error) => {
-    // Handle 401 Unauthorized errors
-    if (error.response?.status === 401) {
-      console.warn("🔐 Authentication required - redirecting to auth screen")
 
-      // Clear any stored auth data
-      localStorage.removeItem("upstox_auth")
-      sessionStorage.removeItem("upstox_auth")
-
-      // Redirect to auth screen
-      window.location.href = "/auth"
+    if (error.code === "ERR_NETWORK") {
+      console.warn("Backend offline")
+      return Promise.resolve({ data: { status: "offline" } })
     }
 
-    // Handle network errors
-    if (!error.response) {
-      console.error("🌐 Network error - please check your connection")
-      return Promise.reject(error)
+    if (error.response?.status >= 500) {
+      console.warn("Server error:", error.response.status)
+      return Promise.resolve({ data: { status: "error" } })
     }
 
-    // Handle other HTTP errors
-    console.error(`❌ API Error: ${error.response?.status} - ${error.response?.data?.detail || error.message}`)
     return Promise.reject(error)
   }
 )
+
+export async function getValidExpiries(symbol: string): Promise<string[]> {
+  try {
+    const response = await api.get(`/api/v1/market/expiries?symbol=${symbol}`)
+    return response.data?.data || []
+  } catch (error) {
+    console.error("Failed to fetch expiries:", error)
+    return []
+  }
+}
 
 export default api

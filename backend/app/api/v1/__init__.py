@@ -9,9 +9,10 @@ from .system import router as system_router
 from .predictions import router as predictions_router
 from .debug import router as debug_router
 from .intelligence import router as intelligence_router
-from .market_session import router as market_session_router  # Add market session router
-# RESTORED: WebSocket router for real-time options chain
+from .market_session import router as market_session_router
 from .live_ws import router as live_ws_router
+from .ws import router as ws_router
+from .ai_status import router as ai_status_router
 
 __all__ = [
     "auth_router",
@@ -21,6 +22,8 @@ __all__ = [
     "predictions_router",
     "debug_router",
     "intelligence_router",
-    "market_session_router",  # Add to exports
-    "live_ws_router"
+    "market_session_router",
+    "live_ws_router",
+    "ws_router",
+    "ai_status_router"
 ]

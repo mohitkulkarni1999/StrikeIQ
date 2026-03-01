@@ -11,8 +11,8 @@ interface BiasAndMoveProps {
 }
 
 export function BiasAndMove({ data, isSnapshotMode }: BiasAndMoveProps) {
-    const biasLabel = data?.intelligence?.bias?.label;
-    const biasScore = data?.intelligence?.bias?.score ?? 0;
+    const biasLabel = (data as any)?.intelligence?.bias?.label;
+    const biasScore = (data as any)?.intelligence?.bias?.score ?? 0;
 
     return (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4">
@@ -51,6 +51,8 @@ export function BiasAndMove({ data, isSnapshotMode }: BiasAndMoveProps) {
                             className="h-full rounded-full transition-all duration-700"
                             style={{
                                 width: `${Math.abs(biasScore) * 10}%`,
+                                height: '6px',
+                                borderRadius: '3px',
                                 background: biasLabel === 'BULLISH'
                                     ? 'linear-gradient(90deg, #166534, #4ade80)'
                                     : biasLabel === 'BEARISH'
@@ -98,28 +100,38 @@ export function BiasAndMove({ data, isSnapshotMode }: BiasAndMoveProps) {
                 </div>
 
                 <div className="flex items-center gap-3 mb-3">
-                    <span className="text-sm font-mono font-bold tabular-nums w-24 text-right shrink-0 text-red-400">
-                        {((data?.spot ?? 0) - (data?.intelligence?.probability?.expected_move ?? 0)).toFixed(2)}
+                    <span className="text-sm font-mono font-bold tabular-nums w-24 shrink-0 text-red-400">
+                        {(((data as any)?.spot ?? 0) - ((data as any)?.intelligence?.probability?.expected_move ?? 0)).toFixed(2)}
                     </span>
                     <div
                         className="flex-1 relative h-5 rounded-full overflow-hidden"
                         style={{ background: 'rgba(0,0,0,0.30)', border: '1px solid rgba(255,255,255,0.07)' }}
                     >
                         <div className="absolute inset-y-0 left-0 right-0 rounded-full" style={{ background: 'linear-gradient(90deg, rgba(239,68,68,0.25), rgba(99,102,241,0.15) 50%, rgba(34,197,94,0.25))' }} />
-                        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 w-px" style={{ background: 'rgba(255,255,255,0.30)' }} />
                         <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center">
                             <div className="w-3.5 h-3.5 rounded-full bg-white border-2" style={{ borderColor: '#080b10', boxShadow: '0 0 10px rgba(255,255,255,0.7)' }} />
                         </div>
                     </div>
-                    <span className="text-sm font-mono font-bold tabular-nums w-24 shrink-0 text-green-400">
-                        {((data?.spot ?? 0) + (data?.intelligence?.probability?.expected_move ?? 0)).toFixed(2)}
-                    </span>
                 </div>
-
                 <div className="flex justify-between text-[10px] font-mono px-1 mb-4" style={{ color: 'rgba(148,163,184,0.50)' }}>
                     <span>↓ Lower bound</span>
-                    <span className="text-white">Spot: {data?.spot?.toFixed(2) ?? '—'}</span>
+                    <span className="text-white">Spot: {(((data as any)?.spot ?? 0).toFixed(2)) ?? '—'}</span>
                     <span>Upper bound ↑</span>
+                </div>
+
+                <div className="flex items-center gap-3 mb-3">
+                    <span className="text-sm font-mono font-bold tabular-nums w-24 shrink-0 text-green-400">
+                        {(((data as any)?.spot ?? 0) + ((data as any)?.intelligence?.probability?.expected_move ?? 0)).toFixed(2)}
+                    </span>
+                    <div
+                        className="flex-1 relative h-5 rounded-full overflow-hidden"
+                        style={{ background: 'rgba(0,0,0,0.30)', border: '1px solid rgba(255,255,255,0.07)' }}
+                    >
+                        <div className="absolute inset-y-0 left-0 right-0 rounded-full" style={{ background: 'linear-gradient(90deg, rgba(239,68,68,0.25), rgba(99,102,241,0.15) 50%, rgba(34,197,94,0.25))' }} />
+                        <div className="absolute inset-y-0 left-1/2 -translate-x-1/2 flex items-center">
+                            <div className="w-3.5 h-3.5 rounded-full bg-white border-2" style={{ borderColor: '#080b10', boxShadow: '0 0 10px rgba(255,255,255,0.7)' }} />
+                        </div>
+                    </div>
                 </div>
 
                 <div
@@ -127,7 +139,7 @@ export function BiasAndMove({ data, isSnapshotMode }: BiasAndMoveProps) {
                     style={{ background: 'rgba(251,146,60,0.08)', border: '1px solid rgba(251,146,60,0.22)', color: '#fb923c' }}
                 >
                     <AlertTriangle className="w-3.5 h-3.5" />
-                    BREAKOUT RISK: {data?.intelligence?.probability?.breach_probability?.toFixed(0) ?? '0'}%
+                    BREAKOUT RISK: {(((data as any)?.intelligence?.probability?.breach_probability?.toFixed(0)) ?? '0')}%
                 </div>
             </div>
         </div>

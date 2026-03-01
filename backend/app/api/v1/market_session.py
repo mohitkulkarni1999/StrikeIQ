@@ -4,36 +4,29 @@ Exposes market status and engine mode information to frontend
 """
 
 from fastapi import APIRouter, HTTPException
-from typing import Dict, Any
 from datetime import datetime
+from typing import Dict, Any
 import logging
-from ...services.market_session_manager import (
-    get_market_session_manager, 
-    MarketSession, 
-    EngineMode
-)
+
+from app.services.market_session_manager import check_market_time
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-session"])
 logger = logging.getLogger(__name__)
 
+
 @router.get("/session", response_model=Dict[str, Any])
 async def get_market_session():
-    """Get current market session status and engine mode"""
+    """Return current market session"""
+
     try:
-        manager = get_market_session_manager()
-        status_info = manager.get_status_info()
-        
         return {
             "status": "success",
             "data": {
-                "market_status": status_info["market_status"],
-                "engine_mode": status_info["engine_mode"],
-                "last_check": status_info["last_check"],
-                "is_polling": status_info["is_polling"]
-            },
-            "timestamp": datetime.utcnow().isoformat()
+                "market_open": check_market_time(),
+                "server_time": datetime.now().isoformat()
+            }
         }
-        
+
     except Exception as e:
         logger.error(f"Error getting market session: {e}")
         raise HTTPException(status_code=500, detail=str(e))

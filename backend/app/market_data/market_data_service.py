@@ -9,7 +9,7 @@ async def get_latest_option_chain(symbol: str, db=None):
     """
     try:
         # Use factory function to get builder instance
-        builder = get_live_chain_builder()
+        builder = get_live_chain_builder(symbol)
         
         # Get the latest option chain state
         state = builder.get_latest_option_chain(symbol)

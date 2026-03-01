@@ -10,6 +10,21 @@ class ProbabilityEngine:
     def __init__(self):
         self.model = None  # Placeholder for ML model
     
+    def _get_safe_default_result(self) -> Dict[str, Any]:
+        """Return safe default result for error conditions"""
+        return {
+            'expected_move': 0.0,
+            'upper_1sd': 0.0,
+            'lower_1sd': 0.0,
+            'upper_2sd': 0.0,
+            'lower_2sd': 0.0,
+            'breach_probability': 50.0,
+            'range_hold_probability': 50.0,
+            'volatility_state': 'fair',
+            'implied_volatility': 0.0,
+            'time_to_expiry': 0.0
+        }
+    
     def calculate(self, option_chain):
         """
         Safe probability calculation with error handling
@@ -19,7 +34,7 @@ class ProbabilityEngine:
             # In future, this would call self.model.predict(option_chain)
             if not option_chain:
                 logger.warning("ProbabilityEngine: Empty option_chain received")
-                return None
+                return self._get_safe_default_result()
                 
             # Extract required data from option_chain
             spot_price = option_chain.get('spot', 0)
@@ -27,6 +42,19 @@ class ProbabilityEngine:
             puts = option_chain.get('puts', [])
             volatility_context = option_chain.get('volatility_context', {})
             bias_score = option_chain.get('bias_score', 50)
+            
+            # FIX 10: Add validation for critical data
+            if not spot_price or spot_price <= 0:
+                logger.warning(f"ProbabilityEngine: Invalid spot_price {spot_price}")
+                return self._get_safe_default_result()
+            
+            if not calls or not puts:
+                logger.warning("ProbabilityEngine: Empty calls or puts data")
+                return self._get_safe_default_result()
+            
+            if not isinstance(calls, list) or not isinstance(puts, list):
+                logger.warning("ProbabilityEngine: Invalid calls/puts data type")
+                return self._get_safe_default_result()
             
             result = self.compute_expected_move(
                 spot_price, calls, puts, volatility_context, bias_score
@@ -37,7 +65,7 @@ class ProbabilityEngine:
             
         except Exception as e:
             logger.error(f"ProbabilityEngine Error: {str(e)}")
-            return None
+            return self._get_safe_default_result()
     
     @staticmethod
     def compute_expected_move(

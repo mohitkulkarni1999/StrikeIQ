@@ -52,8 +52,8 @@ const DebugBadge: React.FC<DebugBadgeProps> = ({ className = "" }) => {
 
         fetchDebugInfo();
 
-        // Update every 5 seconds
-        const interval = setInterval(fetchDebugInfo, 5000);
+        // Update every 10 seconds
+        const interval = setInterval(fetchDebugInfo, 10000);
 
         return () => clearInterval(interval);
     }, []);
@@ -89,57 +89,53 @@ const DebugBadge: React.FC<DebugBadgeProps> = ({ className = "" }) => {
     };
 
     return (
-        <div className={`flex flex-col gap-1 p-2 bg-card border border-border rounded text-xs font-mono ${className}`}>
-            {/* Engine Mode */}
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                    {getIcon('engine')}
-                    <span className="text-text-secondary">Engine:</span>
+        <div className={`bg-white/3 border border-white/6 rounded-xl p-3 ${className}`}>
+            {/* Panel Header */}
+            <div className="text-xs font-semibold text-[#5cc8ff] mb-3 uppercase tracking-wider">
+                Market Data Status
+            </div>
+            
+            {/* Status Grid */}
+            <div className="grid grid-cols-[140px_auto] gap-y-2">
+                {/* Engine */}
+                <div className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+                    Engine
                 </div>
-                <span className={`px-2 py-0.5 rounded border ${getStatusColor(debugInfo.engineMode)}`}>
+                <div className="text-[13px] font-semibold text-white">
                     {debugInfo.engineMode}
-                </span>
-            </div>
-
-            {/* Market Status */}
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                    {getIcon('market')}
-                    <span className="text-text-secondary">Market:</span>
                 </div>
-                <span className={`px-2 py-0.5 rounded border ${getStatusColor(debugInfo.marketStatus)}`}>
+                
+                {/* Market */}
+                <div className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+                    Market
+                </div>
+                <div className="text-[13px] font-semibold text-white">
                     {debugInfo.marketStatus}
-                </span>
-            </div>
-
-            {/* Data Source */}
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                    {getIcon('data')}
-                    <span className="text-text-secondary">Source:</span>
                 </div>
-                <span className={`px-2 py-0.5 rounded border ${getStatusColor(debugInfo.dataSource)}`}>
+                
+                {/* Source */}
+                <div className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+                    Source
+                </div>
+                <div className="text-[13px] font-semibold text-white">
                     {debugInfo.dataSource}
-                </span>
-            </div>
-
-            {/* Spot Source */}
-            <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1">
-                    {getIcon('spot')}
-                    <span className="text-text-secondary">Spot:</span>
                 </div>
-                <span className={`px-2 py-0.5 rounded border ${getStatusColor(debugInfo.spotSource)}`}>
+                
+                {/* Spot */}
+                <div className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+                    Spot
+                </div>
+                <div className="text-[13px] font-semibold text-white">
                     {debugInfo.spotSource}
-                </span>
-            </div>
-
-            {/* Combined Mode Display */}
-            <div className="flex items-center gap-2 pt-1 border-t border-border">
-                <span className="text-text-secondary">Mode:</span>
-                <span className={`px-2 py-0.5 rounded font-bold ${getStatusColor(debugInfo.mode)}`}>
+                </div>
+                
+                {/* Mode */}
+                <div className="text-[11px] uppercase tracking-wider text-[#8a8a8a]">
+                    Mode
+                </div>
+                <div className="text-[13px] font-semibold text-white">
                     {debugInfo.mode}
-                </span>
+                </div>
             </div>
         </div>
     );

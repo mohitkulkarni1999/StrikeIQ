@@ -56,8 +56,9 @@ class AIDatabase:
             if self.connection:
                 try:
                     self.connection.rollback()
-                except Exception:
-                    pass
+                    logger.info("Transaction rolled back")
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
             return False
             
     def fetch_query(self, query: str, params: tuple = None):
@@ -75,8 +76,9 @@ class AIDatabase:
             if self.connection:
                 try:
                     self.connection.rollback()
-                except Exception:
-                    pass
+                    logger.info("Transaction rolled back")
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
             return []
             
     def fetch_one(self, query: str, params: tuple = None):
@@ -93,8 +95,9 @@ class AIDatabase:
             if self.connection:
                 try:
                     self.connection.rollback()
-                except Exception:
-                    pass
+                    logger.info("Transaction rolled back")
+                except Exception as rollback_error:
+                    logger.error(f"Error during rollback: {rollback_error}")
             return None
 
 # Global database instance

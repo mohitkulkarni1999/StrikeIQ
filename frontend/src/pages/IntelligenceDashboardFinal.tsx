@@ -7,6 +7,8 @@ import AlertPanel from '../components/intelligence/AlertPanelFinal';
 import InteractionPanel from '../components/intelligence/InteractionPanelFinal';
 import RegimeDynamicsPanel from '../components/intelligence/RegimeDynamicsPanelFinal';
 import ExpiryPanel from '../components/intelligence/ExpiryPanelFinal';
+import { MarketDataDisplay } from '../components/MarketDataDisplay';
+import { useLiveMarketData } from '../hooks/useLiveMarketData';
 // import IOHeatmap from '../components/IOHeatmap'; // Existing component - uncomment when path is correct
 
 interface WebSocketData {
@@ -88,6 +90,11 @@ const IntelligenceDashboard: React.FC = () => {
       {/* INTELLIGENCE SCORE CARDS */}
       <div className="px-6 pb-6">
         <div className="grid grid-cols-12 gap-6">
+          {/* Market Data Display - Test Component */}
+          <div className="col-span-12">
+            <MarketDataDisplay />
+          </div>
+          
           {/* Conviction Panel */}
           <div className="col-span-8">
             <ConvictionPanel conviction={marketData.data?.intelligence?.conviction || 0} />

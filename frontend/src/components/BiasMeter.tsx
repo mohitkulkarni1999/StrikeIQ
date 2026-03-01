@@ -1,22 +1,25 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { TrendingUp, TrendingDown, Target, Activity } from 'lucide-react';
+import { safeMapBiasData, FrontendBiasData } from '../utils/biasMapping';
 
 interface BiasMeterProps {
   intelligence?: {
-    bias: {
-      score: number;
-      label: string;
-      strength: number;
-      direction: string;
-      confidence: number;
-      signal: string;
-    };
+    bias: any; // Raw backend data
   };
 }
 
-export default function BiasMeter({ intelligence }: BiasMeterProps) {
-  console.log('🔍 BiasMeter - Received intelligence:', intelligence);
-  console.log("BiasMeter received confidence:", intelligence?.bias?.confidence);
+function BiasMeter({ intelligence }: BiasMeterProps) {
+  // Map backend bias data to frontend interface
+  const biasData: FrontendBiasData = intelligence?.bias 
+    ? safeMapBiasData(intelligence.bias)
+    : {
+        score: 0,
+        label: 'NEUTRAL',
+        confidence: 0,
+        signal: 'NEUTRAL',
+        direction: 'NONE',
+        strength: 0
+      };
 
   if (!intelligence || !intelligence.bias) {
     return (
@@ -33,8 +36,7 @@ export default function BiasMeter({ intelligence }: BiasMeterProps) {
     );
   }
 
-  const { bias } = intelligence;
-  const { score, label, strength, confidence, signal, direction } = bias;
+  const { score, label, confidence, signal, direction, strength } = biasData;
 
   const getBiasColor = (label: string) => {
     if (label === null || label === undefined) return 'bg-[#FFC857]/20 text-[#FFC857]';
@@ -147,3 +149,5 @@ export default function BiasMeter({ intelligence }: BiasMeterProps) {
     </div>
   );
 }
+
+export default memo(BiasMeter);

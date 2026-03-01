@@ -9,13 +9,16 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Any
 from dataclasses import dataclass
 import logging
-
+from ai.formula_integrator import store_formula_signal
+import asyncio
 from app.core.live_market_state import MarketStateManager
 from app.services.structural_alert_engine import StructuralAlertEngine
 from app.services.gamma_pressure_map import GammaPressureMapEngine
 from app.services.flow_gamma_interaction import FlowGammaInteractionEngine
 from app.services.regime_confidence_engine import RegimeConfidenceEngine
 from app.services.expiry_magnet_model import ExpiryMagnetModel
+from ai.ai_orchestrator import AIOrchestrator
+from app.core.ws_manager import manager
 
 logger = logging.getLogger(__name__)
 
@@ -71,6 +74,9 @@ class LiveStructuralEngine:
         self.historical_data: Dict[str, List[Dict]] = {}  # For trend analysis
         self.previous_oi_snapshot: Dict[str, Dict] = {}  # For OI velocity calculation
         self._lock = asyncio.Lock()
+        
+        # Initialize AI orchestrator for intelligence analysis
+        self.ai_orchestrator = AIOrchestrator()
         
         # Constants for calculations
         self.CONTRACT_MULTIPLIER = 75  # NFO options contract multiplier
@@ -133,6 +139,9 @@ class LiveStructuralEngine:
             
             # Update historical data
             await self._update_historical_data(symbol, metrics)
+            
+            # Execute AI pipeline and broadcast intelligence
+            await self._run_ai_pipeline_and_broadcast(symbol, metrics)
             
             return metrics
             
@@ -223,7 +232,32 @@ class LiveStructuralEngine:
         # NEW: 16. Compute Expiry Magnet Analysis
         expiry_magnet_analysis = self.expiry_magnet_engine.analyze_expiry_magnets(symbol, frontend_data)
         formatted_expiry_analysis = self.expiry_magnet_engine.format_for_frontend(expiry_magnet_analysis)
-        
+        # ================= AI LIVE SIGNAL INTEGRATION =================
+        try:
+            pcr = snapshot.get("pcr", 0)
+            call_oi = snapshot.get("total_oi_calls", 0)
+            put_oi = snapshot.get("total_oi_puts", 0)
+
+            # 🔥 F01: PCR Based Signal
+            if pcr > 1.2:
+                store_formula_signal("F01", "BUY", 0.75, spot)
+
+            elif pcr < 0.8:
+                store_formula_signal("F01", "SELL", 0.75, spot)
+
+            # 🔥 F02: OI Imbalance Signal
+            total = call_oi + put_oi
+            if total > 0:
+                imbalance = abs(call_oi - put_oi) / total
+
+                if imbalance > 0.3:
+                    direction = "BUY" if put_oi > call_oi else "SELL"
+                    store_formula_signal("F02", direction, 0.70, spot)
+
+        except Exception as e:
+            logger.error(f"AI Integration Error: {e}")
+        # =============================================================
+
         return LiveMetrics(
             symbol=symbol,
             spot=spot,
@@ -923,3 +957,79 @@ class LiveStructuralEngine:
         except Exception as e:
             logger.error(f"Error classifying structural regime: {e}")
             return {"structural_regime": "unknown", "regime_confidence": 0}
+    
+    async def _run_ai_pipeline_and_broadcast(self, symbol: str, metrics: LiveMetrics) -> None:
+        """
+        Execute AI pipeline and broadcast intelligence to WebSocket clients
+        """
+        try:
+            # Run AI pipeline with LiveMetrics
+            ai_result = await asyncio.to_thread(self.ai_orchestrator.run_ai_pipeline, metrics)
+            
+            if ai_result:
+                # Build intelligence payload for frontend
+                intelligence_payload = {
+                    "symbol": symbol,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "regime": {
+                        "market_regime": ai_result.get("regime", "NEUTRAL"),
+                        "volatility_regime": metrics.volatility_regime,
+                        "trend_regime": ai_result.get("trend", "SIDEWAYS"),
+                        "confidence": ai_result.get("confidence", 0.0)
+                    },
+                    "bias": {
+                        "score": 0.0,  # Calculate from metrics if needed
+                        "label": "NEUTRAL",
+                        "confidence": 0.0,
+                        "signal": "NEUTRAL",
+                        "direction": "NONE",
+                        "strength": 0.0
+                    },
+                    "gamma": {
+                        "net_gamma": metrics.net_gamma or 0,
+                        "gamma_flip": metrics.gamma_flip_level or 0,
+                        "dealer_gamma": "NEUTRAL",
+                        "gamma_exposure": 0.0
+                    },
+                    "signals": {
+                        "stoploss_hunt": False,
+                        "trap_detection": False,
+                        "liquidity_event": False,
+                        "gamma_squeeze": False
+                    },
+                    "probability": {
+                        "expected_move": metrics.expected_move,
+                        "upper_1sd": metrics.upper_1sd,
+                        "lower_1sd": metrics.lower_1sd,
+                        "upper_2sd": metrics.upper_2sd,
+                        "lower_2sd": metrics.lower_2sd,
+                        "breach_probability": metrics.breach_probability,
+                        "range_hold_probability": metrics.range_hold_probability,
+                        "volatility_state": "normal"
+                    },
+                    "trade_suggestion": ai_result.get("trade_suggestion"),
+                    "reasoning": ai_result.get("explanation", [])
+                }
+                
+                # Broadcast intelligence to WebSocket clients
+                await manager.broadcast_json("market_data", {
+                    "type": "intelligence_update",
+                    "symbol": symbol,
+                    "intelligence": intelligence_payload
+                })
+                
+                logger.info(f"🧠 AI intelligence broadcasted for {symbol}: {ai_result.get('regime', 'UNKNOWN')}")
+            else:
+                logger.warning(f"⚠️ AI pipeline returned no result for {symbol}")
+                
+        except Exception as e:
+            logger.error(f"❌ AI pipeline execution failed for {symbol}: {e}")
+            # Still broadcast basic metrics without AI analysis
+            await manager.broadcast_json("market_data", {
+                "type": "metrics_update",
+                "symbol": symbol,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "spot": metrics.spot,
+                "expected_move": metrics.expected_move,
+                "volatility_regime": metrics.volatility_regime
+            })

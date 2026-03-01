@@ -1,182 +1,201 @@
-import { useState, useEffect, useRef } from 'react';
-import { useLiveOptionsWS } from '@/core/ws/useLiveOptionsWS';
-import { useWSStore } from '@/core/ws/wsStore';
-import { clearWSInitialized } from '@/core/ws/wsInitController';
+import { useState, useEffect, useRef } from "react"
+import { useWSStore } from "@/core/ws/wsStore"
+import { useOptionChainStore } from "@/core/ws/optionChainStore"
+import { clearWSInitialized } from "@/core/ws/wsInitController"
+import { throttle } from "@/utils/throttle"
 
 export interface LiveMarketData {
-    symbol: string;
-    spot: number;
-    change?: number;
-    change_percent?: number;
-    analytics: any;
-    intelligence: any;
-    timestamp: string;
-    structural_regime?: string;
-    regime_confidence?: number;
-    regime_stability?: number;
-    acceleration_index?: number;
-    regime_dynamics?: any;
-    pin_probability?: number;
-    flow_gamma_interaction?: any;
-    expiry_magnet_analysis?: any;
-    expected_move_data?: any;
-    smart_money_activity?: any;
-    option_chain_intelligence?: any;
-    gamma_pressure_map?: any;
-    alerts?: any[];
-    available_expiries?: string[];
-    market_bias?: {
-        vwap?: number;
-        current_price?: number;
-        pcr?: number;
-        bias_strength?: number;
+  symbol: string
+  spot: number
+  timestamp: string
+  change?: number
+  change_percent?: number
+  available_expiries?: string[]
+  optionChain?: {
+    symbol: string
+    spot: number
+    expiry: string
+    calls: any[]
+    puts: any[]
+  } | null
+  intelligence?: {
+    interpretation: {
+      narrative: string | null;
+      risk_context: string | null;
+      positioning_context: string | null;
+      contradiction_flags: string[];
+      confidence_tone: 'high' | 'medium' | 'cautious';
+      interpreted_at?: string;
+      fallback?: boolean;
     };
-    optionChain?: {
-        symbol: string;
-        spot: number;
-        expiry: string;
-        calls: any[];
-        puts: any[];
-    } | null;
+  };
 }
 
-interface MarketStatus {
-    market_status?: string;
-    websocket_status?: string;
-    server_time?: string;
-    symbol_supported?: string[];
-}
+export const WS_BACKEND_ONLINE_EVENT = "strikeiq:backend-online"
 
-interface UseLiveMarketDataReturn {
-    data: LiveMarketData | null;
-    status: MarketStatus | null;
-    loading: boolean;
-    error: string | null;
-    mode: 'loading' | 'snapshot' | 'live' | 'error';
-    isConnected: boolean;
-    symbol: string;
-    availableExpiries: string[];
-    lastUpdate: string;
-}
+export function useLiveMarketData(symbol: string, expiry: string | null) {
 
-// ── Shared event name — Navbar fires this, useLiveMarketData listens ──────────
-export const WS_BACKEND_ONLINE_EVENT = 'strikeiq:backend-online';
+  const initializedRef = useRef(false)
+  const connectedRef = useRef(false)
 
-export function useLiveMarketData(symbol: string, expiry: string | null): UseLiveMarketDataReturn {
+  const [data, setData] = useState<LiveMarketData | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-    const [data, setData] = useState<LiveMarketData | null>(null);
-    const [loading, setLoading] = useState<boolean>(false);
-    const [error, setError] = useState<string | null>(null);
-    const [mode, setMode] = useState<'loading' | 'snapshot' | 'live' | 'error'>('loading');
+  const [mode, setMode] = useState<"loading" | "snapshot" | "live" | "error">("loading")
 
-    // Always-current reference to reconnect — updated every render via useEffect below
-    const reconnectRef = useRef<(() => void) | null>(null);
+  const {
+    spot,
+    lastUpdate,
+    connected,
+    connect
+  } = useWSStore()
 
-    const { reconnect } = useLiveOptionsWS({
-        symbol,
-        expiry: expiry || '',
+  const {
+    optionChainData,
+    optionChainLastUpdate,
+    optionChainConnected
+  } = useOptionChainStore()
 
-        onMessage: (message) => {
-            if (message.status === 'connected') {
-                setData(prev => ({ ...prev, ...message, available_expiries: message.available_expiries || [] }));
-                setMode(prev => prev === 'loading' ? 'snapshot' : prev);
-                setLoading(false);
-                setError(null);
+  /*
+  -------------------------------
+  CONNECT WEBSOCKET
+  -------------------------------
+  */
 
-            } else if (message.status === 'live_update') {
-                const transformed: LiveMarketData = {
-                    ...message,
-                    intelligence: message.intelligence || {},
-                    pin_probability: message.pin_probability,
-                    optionChain: message.option_chain_snapshot ? {
-                        symbol: message.option_chain_snapshot.symbol,
-                        spot: message.option_chain_snapshot.spot,
-                        expiry: message.option_chain_snapshot.expiry,
-                        calls: message.option_chain_snapshot.calls || [],
-                        puts: message.option_chain_snapshot.puts || [],
-                    } : null,
-                    confidence: message.intelligence?.bias?.confidence,
-                    expiries: message.available_expiries || [],
-                    symbol,
-                    spot: message.spot || 0,
-                    timestamp: message.timestamp || new Date().toISOString(),
-                };
-                setData(prev => ({ ...prev, ...transformed }));
-                setMode(message.spot && message.spot > 0 ? 'live' : 'snapshot');
-                setLoading(false);
-                setError(null);
+  useEffect(() => {
 
-            } else if (message.status === 'auth_required') {
-                setError('Authentication required'); setMode('error');
-            } else if (message.status === 'auth_error') {
-                setError('Authentication service unavailable'); setMode('error');
-            }
-        },
+    if (connectedRef.current) return
+    connectedRef.current = true
 
-        onError: (err) => {
-            console.warn('⚠️ WS error:', err);
-            setError(err);
-            setMode('error');
-        },
+    if (symbol && expiry) {
+      connect(symbol, expiry)
+    }
 
-        onDisconnect: () => {
-            setMode(prev => prev === 'live' ? 'loading' : prev);
-        },
-    });
+  }, [symbol, expiry])
 
-    // Keep reconnectRef always pointing to the latest reconnect
-    useEffect(() => {
-        reconnectRef.current = reconnect;
-    }, [reconnect]);
+  /*
+  -------------------------------
+  TRANSFORM STORE DATA → UI DATA (THROTTLED)
+  -------------------------------
+  */
 
-    // ── Listen for the backend-online event fired by Navbar ──────────────────
-    // This is the only reconnect trigger — no stale closures because we always
-    // read reconnectRef.current which is updated every render.
-    useEffect(() => {
-        const handleBackendOnline = () => {
-            console.log('🔄 [useLiveMarketData] backend-online event received → reconnecting');
+  // Create throttled update function (100ms delay)
+  const throttledSetData = useRef(
+    throttle((transformedData: LiveMarketData) => {
+      setData(transformedData);
+      setMode("live");
+      setLoading(false);
+      setError(null);
+    }, 100)
+  ).current;
 
-            // Full reset of wsStore guards so connect() isn't blocked
-            const store = useWSStore.getState();
-            store.setConnected(false);
-            store.setInitializing(false);
-            store.setError(null);
-            store.resetReconnectAttempts();
-            store.setWS(null);
+  useEffect(() => {
 
-            // Clear the init flag so /api/ws/init is called again
-            clearWSInitialized();
+    if (spot === 0 && !optionChainData) return
 
-            // Reset UI
-            setMode('loading');
-            setLoading(true);
-            setError(null);
+    const transformed: LiveMarketData = {
 
-            // Call reconnect via ref — always fresh, never stale
-            reconnectRef.current?.();
-        };
+      symbol,
 
-        window.addEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline);
-        return () => window.removeEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline);
-    }, []); // empty deps — safe because we use reconnectRef.current
+      spot: spot || optionChainData?.spot || 0,
 
-    // ── Sync isConnected from wsStore ─────────────────────────────────────────
-    const isConnected = useWSStore(state => state.isConnected);
+      timestamp: new Date(lastUpdate || optionChainLastUpdate).toISOString(),
 
-    useEffect(() => {
-        if (isConnected) {
-            setLoading(false);
-            setError(null);
-        } else {
-            setMode(prev => prev === 'live' ? 'loading' : prev);
-        }
-    }, [isConnected]);
+      available_expiries: [],
 
-    return {
-        data, loading, error, mode, isConnected,
-        symbol,
-        availableExpiries: data?.available_expiries || [],
-        lastUpdate: new Date().toISOString(),
-        status: null,
-    };
+      optionChain: optionChainData
+        ? {
+            symbol: optionChainData.symbol || symbol,
+            spot: optionChainData.spot || spot,
+            expiry: optionChainData.expiry || expiry || "",
+            calls: optionChainData.calls || [],
+            puts: optionChainData.puts || []
+          }
+        : null
+
+    }
+
+    // Use throttled update instead of direct setState
+    throttledSetData(transformed)
+
+  }, [spot, optionChainData, lastUpdate, optionChainLastUpdate, symbol, expiry])
+
+  /*
+  -------------------------------
+  CONNECTION STATUS
+  -------------------------------
+  */
+
+  useEffect(() => {
+
+    if (!connected) {
+
+      setLoading(true)
+      setMode("loading")
+
+    }
+
+  }, [connected])
+
+  /*
+  -------------------------------
+  BACKEND RESTART HANDLER
+  -------------------------------
+  */
+
+  useEffect(() => {
+
+    const handleBackendOnline = () => {
+
+      const store = useWSStore.getState()
+
+      store.disconnect()
+
+      clearWSInitialized()
+
+      setMode("loading")
+      setLoading(true)
+      setError(null)
+
+      if (symbol && expiry) {
+        connect(symbol, expiry)
+      }
+
+    }
+
+    window.addEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline)
+
+    return () => {
+      window.removeEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline)
+    }
+
+  }, [symbol, expiry])
+
+  /*
+  -------------------------------
+  RETURN DATA
+  -------------------------------
+  */
+
+  return {
+
+    data,
+
+    loading,
+
+    error,
+
+    mode,
+
+    connected,
+
+    symbol,
+
+    lastUpdate: data?.timestamp || new Date().toISOString(),
+
+    availableExpiries: []
+
+  }
+
 }
