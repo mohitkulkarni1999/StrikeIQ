@@ -133,6 +133,21 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
     }
   };
 
+  // Fixed logic: Show SNAPSHOT when market is closed, LIVE when connected, OFFLINE only when backend is down
+  const getDisplayMode = () => {
+    if (backendState === 'offline') {
+      return 'OFFLINE';
+    }
+    if (session.market_status === 'CLOSED') {
+      return 'SNAPSHOT';
+    }
+    if (session.engine_mode === 'LIVE') {
+      return 'LIVE';
+    }
+    return session.engine_mode || 'OFFLINE';
+  };
+
+  const displayMode = getDisplayMode();
   const statusStyle = getStatusStyle(session.market_status);
 
   return (
@@ -150,13 +165,13 @@ const MarketStatusIndicator: React.FC<MarketStatusIndicatorProps> = ({ className
         {session.market_status}
       </div>
 
-      {/* Engine Mode */}
+      {/* Engine Mode - Fixed logic */}
       <div
         className="flex items-center gap-1 text-[10px] font-mono"
-        style={{ color: getModeColor(session.engine_mode) }}
+        style={{ color: getModeColor(displayMode) }}
       >
-        {getModeIcon(session.engine_mode)}
-        <span className="hidden sm:inline">{session.engine_mode}</span>
+        {getModeIcon(displayMode)}
+        <span className="hidden sm:inline">{displayMode}</span>
       </div>
     </div>
   );

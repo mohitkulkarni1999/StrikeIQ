@@ -1,8 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import Head from 'next/head';
 import Dashboard from '@/components/Dashboard';
-import Footer from '@/components/layout/Footer';
-import axios from 'axios';
+import Footer, { type FooterProps } from '@/components/layout/Footer';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'FINNIFTY'] as const;
 type Symbol = typeof SYMBOLS[number];
@@ -11,34 +10,6 @@ const OPEN_STATES = ['OPEN', 'PRE_OPEN', 'OPENING_END'];
 
 export default function Home() {
   const [selectedSymbol, setSelectedSymbol] = useState<Symbol>('NIFTY');
-
-  const [marketStatus, setMarketStatus] = useState<string | null>(null);
-  const [statusError, setStatusError] = useState(false);
-
-  useEffect(() => {
-    const fetchMarketStatus = async () => {
-      try {
-        const res = await axios.get('/api/v1/market/session');
-        const data = res.data;
-        
-        if (data?.market_open === true) {
-          setMarketStatus('OPEN');
-        } else {
-          setMarketStatus('CLOSED');
-        }
-        setStatusError(false);
-      } catch {
-        setStatusError(true);
-      }
-    };
-
-    fetchMarketStatus();
-    const id = setInterval(fetchMarketStatus, 60_000);
-    return () => clearInterval(id);
-  }, []);
-
-  const marketOpen = marketStatus === 'OPEN';
-  const statusResolved = marketStatus !== null || statusError;
 
   return (
     <>
@@ -111,41 +82,11 @@ export default function Home() {
                 );
               })}
             </div>
-
-            {/* Market status badge */}
-            {statusResolved && (
-              <div
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full border select-none"
-                style={
-                  marketOpen
-                    ? { background: 'rgba(34,197,94,0.08)', border: '1px solid rgba(34,197,94,0.28)' }
-                    : { background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)' }
-                }
-              >
-                {marketOpen ? (
-                  <span className="relative flex h-2 w-2 shrink-0">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-60" />
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-green-400" />
-                  </span>
-                ) : (
-                  <span className="w-2 h-2 rounded-full bg-slate-600 shrink-0" />
-                )}
-                <span
-                  className="text-[11px] font-semibold"
-                  style={{
-                    fontFamily: "'JetBrains Mono', monospace",
-                    color: marketOpen ? '#4ade80' : '#6B7280',
-                  }}
-                >
-                  {marketOpen ? 'MARKET OPEN' : 'MARKET CLOSED'}
-                </span>
-              </div>
-            )}
           </div>
         </div>
 
         {/* ── DASHBOARD ──────────────────────────────────────────────────── */}
-        <div className="relative z-10">
+        <div className="relative z-10 pt-20">
           <Dashboard initialSymbol={selectedSymbol} key={selectedSymbol} />
         </div>
 

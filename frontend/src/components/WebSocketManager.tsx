@@ -73,7 +73,6 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
       // TOKEN EXPIRED → WS AUTH FAILED
       if (error?.response?.status === 401 ||
           error?.response?.status === 403) {
-        console.warn("Skipping WS init on auth page");
         setIsInitializing(false);
         delete (window as any).__STRIKEIQ_WS_INITIALIZING__;
         return false;
@@ -81,8 +80,6 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
 
       // For other errors, fall through to general error handling
     }
-    
-    console.log('WebSocket feed initialized successfully');
     
     try {
       // Only after successful init, create WebSocket connection
@@ -142,12 +139,11 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
             setConnected(true);
           }
         } catch (err) {
-          console.error('Error parsing WebSocket message:', err);
+          setError('Failed to parse WebSocket message');
         }
       };
 
       ws.onclose = (event) => {
-        console.log('WebSocket closed:', event.code, event.reason);
         setConnected(false);
         setWS(null);
         wsRef.current = null;
@@ -161,18 +157,15 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
         // Attempt reconnection if not manually closed and under max attempts
         if (event.code !== 1000 && reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++;
-          console.log(`Attempting to reconnect in ${reconnectDelay}ms (attempt ${reconnectAttemptsRef.current})`);
 
           reconnectTimeoutRef.current = setTimeout(() => {
             // Check if already reconnected before attempting
             if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) {
               connectWebSocket();
-            } else {
-              console.log('WebSocket already reconnected, skipping retry');
             }
           }, reconnectDelay);
         } else if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
-          setError('Max reconnection attempts reached. Please refresh the page.');
+          setInitError('Max reconnection attempts reached');
           setIsInitializing(false);
         }
       };
@@ -196,13 +189,13 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
       // Retry logic for init failure
       if (reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
-        console.log(`Retrying WebSocket init in ${reconnectDelay}ms (attempt ${reconnectAttemptsRef.current})`);
         
         reconnectTimeoutRef.current = setTimeout(() => {
           connectWebSocket();
         }, reconnectDelay);
       } else {
-        setError('Max initialization attempts reached. Please refresh the page.');
+        setInitError('Failed to initialize WebSocket after multiple attempts');
+        setIsInitializing(false);
       }
       
       return false;
@@ -211,12 +204,10 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
 
   const connectWebSocket = async () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      console.log('WebSocket already connected');
       return;
     }
 
     if (isInitializing) {
-      console.log('WebSocket initialization already in progress');
       return;
     }
 
@@ -249,13 +240,22 @@ const WebSocketManager = ({ symbol, expiry }: WebSocketManagerProps) => {
     connectWebSocket();
     
     return () => {
+      // FIX 6: Ensure WebSocket connection is properly closed
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+        reconnectTimeoutRef.current = null;
+      }
       disconnect();
     };
   }, []);
 
-  // Debug logging for state changes
+  // Debug logging for state changes (removed console.log for production)
   useEffect(() => {
-    console.log('WebSocketManager state:', { isInitializing, initError });
+    // Debug state changes can be logged here in development
   }, [isInitializing, initError]);
 
   return null;

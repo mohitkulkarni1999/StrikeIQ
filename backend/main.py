@@ -1,5 +1,6 @@
 import logging
 import asyncio
+import os
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -16,9 +17,30 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# ================= AI + SCHEDULER LOGGING CONFIG =================
+
+# AI + Scheduler logs toggle from environment variable
+AI_LOGS_ENABLED = os.getenv("AI_LOGS", "false").lower() == "true"
+
+# Configure specific AI and scheduler loggers based on environment variable
+if AI_LOGS_ENABLED:
+    logger.info("🤖 AI + Scheduler logs ENABLED")
+else:
+    # Suppress AI-related loggers
+    logging.getLogger("ai").setLevel(logging.CRITICAL)
+    logging.getLogger("app.services.ai_signal_engine").setLevel(logging.CRITICAL)
+    logging.getLogger("app.services.paper_trade_engine").setLevel(logging.CRITICAL)
+    
+    # Suppress APScheduler loggers
+    logging.getLogger("apscheduler.scheduler").setLevel(logging.CRITICAL)
+    logging.getLogger("apscheduler.executors").setLevel(logging.CRITICAL)
+    logging.getLogger("apscheduler").setLevel(logging.CRITICAL)
+    
+    logger.info("🤖 AI + Scheduler logs DISABLED")
+
 # ================= AI CONFIG =================
 
-ENABLE_AI = False
+ENABLE_AI = True
 
 
 # ================= CORE =================
@@ -262,6 +284,68 @@ async def init_websocket(request: Request):
             logger.error(f"WS init failed: {str(e)}")
 
             raise HTTPException(status_code=500, detail="WebSocket init failed")
+
+
+# ================= SYSTEM MONITORING =================
+
+@app.get("/system/ws-status")
+async def get_websocket_status():
+    """Get WebSocket connection status"""
+    try:
+        feed = await ws_feed_manager.get_feed()
+        
+        if feed and feed.is_connected:
+            return {
+                "status": "connected",
+                "connected": True,
+                "last_heartbeat": "active",
+                "uptime": "running"
+            }
+        else:
+            return {
+                "status": "disconnected", 
+                "connected": False,
+                "last_heartbeat": "none",
+                "uptime": "offline"
+            }
+    except Exception as e:
+        logger.error(f"WS status check failed: {e}")
+        return {
+            "status": "error",
+            "connected": False,
+            "last_heartbeat": "error",
+            "uptime": "unknown"
+        }
+
+@app.get("/system/ai-status")
+async def get_ai_status():
+    """Get AI scheduler status and market state"""
+    try:
+        from ai.scheduler import ai_scheduler
+        from app.services.market_session_manager import get_market_session_manager
+        
+        market_manager = get_market_session_manager()
+        is_market_open = market_manager.is_market_open()
+        
+        # Get AI scheduler status
+        job_status = ai_scheduler.get_job_status()
+        
+        return {
+            "status": "running" if ai_scheduler.scheduler.running else "stopped",
+            "market_open": is_market_open,
+            "active_jobs": len(job_status),
+            "last_run": "active" if ai_scheduler.scheduler.running else "inactive",
+            "jobs": job_status
+        }
+    except Exception as e:
+        logger.error(f"AI status check failed: {e}")
+        return {
+            "status": "error",
+            "market_open": False,
+            "active_jobs": 0,
+            "last_run": "error",
+            "jobs": []
+        }
 
 
 # ================= ROUTERS =================

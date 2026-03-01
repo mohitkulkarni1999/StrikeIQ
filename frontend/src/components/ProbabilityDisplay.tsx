@@ -1,12 +1,17 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { TrendingUp, TrendingDown, BarChart3, AlertTriangle, Target, Activity } from 'lucide-react';
 
 interface ProbabilityDisplayProps {
   probability?: any;
 }
 
-export default function ProbabilityDisplay({ probability }: ProbabilityDisplayProps) {
-  console.log('🔍 ProbabilityDisplay - Received probability:', probability);
+function ProbabilityDisplay({ probability }: ProbabilityDisplayProps) {
+  // Normalize probability values from backend (0-100) to frontend (0-1) for calculations
+  const normalizedProbability = probability ? {
+    ...probability,
+    breach_probability: probability.breach_probability / 100,
+    range_hold_probability: probability.range_hold_probability / 100,
+  } : null;
 
   if (!probability) {
     return (
@@ -29,6 +34,8 @@ export default function ProbabilityDisplay({ probability }: ProbabilityDisplayPr
         return 'text-danger-400 bg-danger-500/20 border-danger-500/30';
       case 'underpriced':
         return 'text-success-400 bg-success-500/20 border-success-500/30';
+      case 'fair':
+        return 'text-blue-400 bg-blue-500/20 border-blue-500/30';
       default:
         return 'text-blue-400 bg-blue-500/20 border-blue-500/30';
     }
@@ -40,6 +47,8 @@ export default function ProbabilityDisplay({ probability }: ProbabilityDisplayPr
         return <TrendingUp className="w-4 h-4" />;
       case 'underpriced':
         return <TrendingDown className="w-4 h-4" />;
+      case 'fair':
+        return <Target className="w-4 h-4" />;
       default:
         return <Target className="w-4 h-4" />;
     }
@@ -139,3 +148,5 @@ export default function ProbabilityDisplay({ probability }: ProbabilityDisplayPr
     </div>
   );
 }
+
+export default memo(ProbabilityDisplay);

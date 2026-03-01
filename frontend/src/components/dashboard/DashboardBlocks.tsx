@@ -51,7 +51,7 @@ export function SnapshotReadyBlock() {
                 className="px-4 py-1.5 rounded-full text-xs font-mono font-bold"
                 style={{ background: 'rgba(59,130,246,0.10)', border: '1px solid rgba(59,130,246,0.22)', color: '#60a5fa' }}
             >
-                MARKET CLOSED
+                SNAPSHOT MODE
             </div>
         </div>
     );

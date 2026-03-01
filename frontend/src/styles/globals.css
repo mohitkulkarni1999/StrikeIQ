@@ -42,7 +42,7 @@ body {
 
 @layer base {
   html {
-    scroll-behavior: auto;
+    scroll-behavior: smooth;
     overflow-anchor: none;
     scroll-padding-top: 0;
     scroll-padding-bottom: 0;

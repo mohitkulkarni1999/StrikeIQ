@@ -9,12 +9,11 @@ interface TickerStripProps {
     data: LiveMarketData | null;
     effectiveSpot: number | null;
     mode: string;
-    status: { market_status?: string } | null;
     modeLabel: string;
     modeColor: string;
 }
 
-export function TickerStrip({ symbol, data, effectiveSpot, mode, status, modeLabel, modeColor }: TickerStripProps) {
+export function TickerStrip({ symbol, data, effectiveSpot, mode, modeLabel, modeColor }: TickerStripProps) {
     const changePositive = (data?.change ?? 0) >= 0;
 
     return (
@@ -80,30 +79,7 @@ export function TickerStrip({ symbol, data, effectiveSpot, mode, status, modeLab
 
                 <div className="flex-1 hidden sm:block" />
 
-                {/* Market status */}
-                {status?.market_status && (
-                    <div
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono font-bold"
-                        style={
-                            status.market_status === 'OPEN'
-                                ? { background: 'rgba(34,197,94,0.10)', border: '1px solid rgba(34,197,94,0.28)', color: '#4ade80' }
-                                : status.market_status === 'PRE_OPEN'
-                                    ? { background: 'rgba(234,179,8,0.10)', border: '1px solid rgba(234,179,8,0.28)', color: '#facc15' }
-                                    : { background: 'rgba(239,68,68,0.08)', border: '1px solid rgba(239,68,68,0.22)', color: '#f87171' }
-                        }
-                    >
-                        <span
-                            className="w-1.5 h-1.5 rounded-full"
-                            style={{
-                                background: status.market_status === 'OPEN' ? '#4ade80' : status.market_status === 'PRE_OPEN' ? '#facc15' : '#f87171',
-                                boxShadow: status.market_status === 'OPEN' ? '0 0 6px #4ade80' : 'none',
-                            }}
-                        />
-                        {status.market_status}
-                    </div>
-                )}
-
-                {/* Engine mode */}
+                {/* Engine mode - Fixed logic to show LIVE/SNAPSHOT/OFFLINE */}
                 <div
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-mono font-bold"
                     style={{

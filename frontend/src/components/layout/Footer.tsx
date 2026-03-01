@@ -5,7 +5,7 @@ import api from '../../api/axios';
 
 const OPEN_STATES = ['OPEN', 'PRE_OPEN', 'OPENING_END'];
 
-interface FooterProps {
+export interface FooterProps {
     onSymbolSelect?: (sym: string) => void;
 }
 

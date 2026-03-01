@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from "react"
 import { useWSStore } from "@/core/ws/wsStore"
 import { clearWSInitialized } from "@/core/ws/wsInitController"
+import { throttle } from "@/utils/throttle"
 
 export interface LiveMarketData {
   symbol: string
   spot: number
   timestamp: string
+  available_expiries?: string[]
   optionChain?: {
     symbol: string
     spot: number
@@ -13,6 +15,17 @@ export interface LiveMarketData {
     calls: any[]
     puts: any[]
   } | null
+  intelligence?: {
+    interpretation: {
+      narrative: string | null;
+      risk_context: string | null;
+      positioning_context: string | null;
+      contradiction_flags: string[];
+      confidence_tone: 'high' | 'medium' | 'cautious';
+      interpreted_at?: string;
+      fallback?: boolean;
+    };
+  };
 }
 
 export const WS_BACKEND_ONLINE_EVENT = "strikeiq:backend-online"
@@ -55,9 +68,19 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
 
   /*
   -------------------------------
-  TRANSFORM STORE DATA → UI DATA
+  TRANSFORM STORE DATA → UI DATA (THROTTLED)
   -------------------------------
   */
+
+  // Create throttled update function (100ms delay)
+  const throttledSetData = useRef(
+    throttle((transformedData: LiveMarketData) => {
+      setData(transformedData);
+      setMode("live");
+      setLoading(false);
+      setError(null);
+    }, 100)
+  ).current;
 
   useEffect(() => {
 
@@ -71,6 +94,8 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
 
       timestamp: new Date(lastUpdate).toISOString(),
 
+      available_expiries: [],
+
       optionChain: optionChain
         ? {
             symbol,
@@ -83,12 +108,10 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
 
     }
 
-    setData(transformed)
-    setMode("live")
-    setLoading(false)
-    setError(null)
+    // Use throttled update instead of direct setState
+    throttledSetData(transformed)
 
-  }, [spot, optionChain, lastUpdate])
+  }, [spot, optionChain, lastUpdate, symbol, expiry])
 
   /*
   -------------------------------

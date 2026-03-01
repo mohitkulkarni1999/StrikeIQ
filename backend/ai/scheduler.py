@@ -2,12 +2,14 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 import logging
 from .outcome_checker import outcome_checker
+from app.services.market_session_manager import get_market_session_manager
 
 logger = logging.getLogger(__name__)
 
 class AIScheduler:
     def __init__(self):
         self.scheduler = AsyncIOScheduler()
+        self.market_session_manager = get_market_session_manager()
         self.setup_jobs()
         
     def setup_jobs(self):
@@ -81,6 +83,11 @@ class AIScheduler:
     def signal_generation_job(self):
         """Job for generating AI signals"""
         try:
+            # Check if market is open before running AI
+            if not self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping signal generation")
+                return
+                
             from app.services.ai_signal_engine import ai_signal_engine
             signals_generated = ai_signal_engine.generate_signals()
             if signals_generated > 0:
@@ -91,6 +98,11 @@ class AIScheduler:
     def paper_trade_monitor_job(self):
         """Job for monitoring paper trades"""
         try:
+            # Check if market is open before running AI
+            if not self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping paper trade monitor")
+                return
+                
             from app.services.paper_trade_engine import paper_trade_engine
             trades_closed = paper_trade_engine.monitor_open_trades()
             if trades_closed > 0:
@@ -101,6 +113,11 @@ class AIScheduler:
     def new_prediction_processing_job(self):
         """Job for processing new predictions into paper trades"""
         try:
+            # Check if market is open before running AI
+            if not self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping prediction processing")
+                return
+                
             from app.services.paper_trade_engine import paper_trade_engine
             trades_created = paper_trade_engine.process_new_predictions()
             if trades_created > 0:
@@ -111,6 +128,11 @@ class AIScheduler:
     def outcome_checker_job(self):
         """Job for checking prediction outcomes"""
         try:
+            # Check if market is open before running AI
+            if not self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping outcome checker")
+                return
+                
             from app.services.ai_outcome_engine import ai_outcome_engine
             outcomes_evaluated = ai_outcome_engine.evaluate_pending_outcomes()
             if outcomes_evaluated > 0:
@@ -121,6 +143,11 @@ class AIScheduler:
     def learning_update_job(self):
         """Job for updating AI learning"""
         try:
+            # Check if market is open before running AI
+            if not self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping learning update")
+                return
+                
             from app.services.ai_learning_engine import ai_learning_engine
             formulas_updated = ai_learning_engine.update_all_formula_learning()
             if formulas_updated > 0:

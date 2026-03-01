@@ -70,11 +70,15 @@ class WebSocketMarketFeed:
 
         self.running = True
 
+        # Try to connect, but don't fail if authentication fails
         success = await self.connect()
-
+        
         if not success:
-            self.running = False
-            raise RuntimeError("Shared WS connect failed")
+            logger.warning("⚠️ WebSocket connection failed - running in REST-only mode")
+            # Continue without WebSocket - AI will still work with REST data
+            self.running = True
+            self._start_tasks()
+            return
 
         self._start_tasks()
 

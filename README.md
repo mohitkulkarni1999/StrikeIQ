@@ -1,10 +1,10 @@
 # StrikeIQ - Options Market Intelligence SaaS
 
-AI-powered options market intelligence platform for Indian markets (NIFTY & BANKNIFTY) with **production-grade OAuth 2.0 security implementation** and **proactive structural intelligence engine**.
+AI-powered options market intelligence platform for Indian markets (NIFTY & BANKNIFTY) with **production-grade OAuth 2.0 security implementation**, **proactive structural intelligence engine**, and **clean, optimized UI architecture**.
 
 ## Features
 
-### 🧠 Structural Intelligence Engine (NEW)
+### 🧠 Structural Intelligence Engine
 - **Structural Regime Classification**: RANGE, TREND, BREAKOUT, PIN RISK detection
 - **Gamma Pressure Maps**: Strike-level gamma exposure with magnets and cliffs
 - **Flow + Gamma Interaction**: Unique interaction matrix for market states
@@ -31,17 +31,55 @@ AI-powered options market intelligence platform for Indian markets (NIFTY & BANK
 - Long/short buildup identification
 - Liquidity trap zone detection
 
-### 🎯 Intelligence Dashboard UI (NEW)
+### 🎯 Optimized Intelligence Dashboard
 - **Institutional-grade terminal interface**
+- **Streamlined Navigation**: Options Chain now redirects to functional OI Heatmap
 - **Structural Regime Banner**: Real-time regime with confidence metrics
 - **Intelligence Score Cards**: Conviction, directional pressure, instability
 - **Gamma Pressure Map**: Strike-level magnets and cliffs visualization
+- **OI Heatmap**: Interactive options interest visualization with smooth scrolling
 - **Structural Alerts Panel**: Proactive alerts with severity levels
 - **Flow + Gamma Interaction**: Decision-oriented interaction analysis
 - **Regime Dynamics Panel**: Enhanced regime stability and acceleration
 - **Expiry Intelligence Panel**: Expiry-specific pin and magnet analysis
 - **Dark theme optimized for trading terminals**
 - **Real-time WebSocket streaming**
+
+## 🛠️ System Improvements (Latest)
+
+### Repository Cleanup & Optimization
+- **Clean Architecture**: Removed 40+ outdated debug scripts, experimental files, and legacy test files
+- **Production Tests**: Implemented comprehensive test suite with 5 focused test files:
+  - `test_websocket.py` - WebSocket connection and status detection
+  - `test_option_chain.py` - Option chain API and multi-expiry support  
+  - `test_ai_scheduler.py` - AI scheduler with market gating functionality
+  - `test_market_status.py` - Market session manager testing
+  - `test_api_endpoints.py` - System monitoring and API compatibility
+- **AI Market Gating**: AI engines now only run during market hours (9:15 AM - 3:30 PM IST, weekdays)
+- **System Monitoring**: Added new health and status endpoints:
+  - `/system/ws-status` - WebSocket connection status (LIVE/OFFLINE/ERROR)
+  - `/system/ai-status` - AI scheduler status with market state
+- **WebSocket Optimization**: Improved connection management and status detection
+- **UI Streamlining**: Removed placeholder Option Chain panel, enhanced navigation flow
+- **Smooth Scrolling**: Added CSS smooth scrolling for better user experience
+
+### UI/UX Enhancements
+- **Navigation Optimization**: "Options Chain" tab now redirects to functional OI Heatmap
+- **Clean Dashboard**: Removed unused placeholder panels for streamlined interface
+- **Responsive Design**: Enhanced mobile and tablet compatibility
+- **Performance**: Optimized component rendering and data flow
+
+### Backend Optimizations
+- **Market-Aware AI**: Scheduler respects market hours, reducing resource usage during closed market
+- **Connection Health**: Real-time WebSocket status monitoring and reporting
+- **Error Handling**: Improved error recovery and graceful degradation
+- **Resource Efficiency**: Better memory and CPU usage patterns
+
+### Production Readiness
+- **System Status**: 6/10 readiness score with clear improvement roadmap
+- **Monitoring**: Comprehensive health checks and status reporting
+- **Testing**: Full test coverage for critical components
+- **Documentation**: Updated architecture and deployment guides
 
 ## Architecture
 
@@ -69,7 +107,7 @@ StrikeIQ/
 │   │   │   ├── auth.py         # OAuth authentication (PRODUCTION-GRADE)
 │   │   │   ├── market.py       # Market data endpoints
 │   │   │   ├── options.py      # Options data endpoints
-│   │   │   ├── system.py       # System endpoints
+│   │   │   ├── system.py       # System monitoring endpoints
 │   │   │   ├── predictions.py  # Predictions endpoints
 │   │   │   └── debug.py         # Debug endpoints (PRODUCTION-SAFE)
 │   │   ├── core/           # Core configuration
@@ -94,10 +132,19 @@ StrikeIQ/
 │   │       ├── flow_gamma_interaction.py # Flow + Gamma interaction
 │   │       ├── regime_confidence_engine.py # Regime dynamics
 │   │       └── expiry_magnet_model.py # Expiry intelligence
+│   ├── ai/                    # AI engines and scheduler
+│   │   ├── scheduler.py      # AI scheduler with market gating
+│   │   └── [engines]/       # AI analysis engines
+│   ├── tests/                  # Clean test suite
+│   │   ├── test_websocket.py      # WebSocket connection tests
+│   │   ├── test_option_chain.py   # Option chain API tests
+│   │   ├── test_ai_scheduler.py   # AI scheduler tests
+│   │   ├── test_market_status.py # Market status tests
+│   │   └── test_api_endpoints.py # API endpoint tests
 │   └── main.py             # FastAPI application entry point
 ├── frontend/                # Next.js frontend
 │   ├── components/           # React components
-│   │   ├── intelligence/     # Intelligence UI components (NEW)
+│   │   ├── intelligence/     # Intelligence UI components
 │   │   │   ├── StructuralBannerFinal.tsx    # Regime banner
 │   │   │   ├── ConvictionPanelFinal.tsx     # Intelligence score cards
 │   │   │   ├── GammaPressurePanelFinal.tsx   # Gamma pressure map
@@ -105,24 +152,29 @@ StrikeIQ/
 │   │   │   ├── InteractionPanelFinal.tsx     # Flow + Gamma interaction
 │   │   │   ├── RegimeDynamicsPanelFinal.tsx # Regime dynamics
 │   │   │   └── ExpiryPanelFinal.tsx        # Expiry intelligence
-│   │   ├── AuthScreen.tsx      # Authentication screen (SECURE)
-│   │   ├── OAuthHandler.tsx     # OAuth callback handler (SECURE)
-│   │   ├── Dashboard.tsx       # Market dashboard
-│   │   ├── IOHeatmap.tsx       # OI heatmap visualization
-│   │   └── MarketData.tsx      # Real-time market data
+│   │   ├── layout/          # Layout components
+│   │   │   ├── Navbar.tsx      # Navigation with smooth scrolling
+│   │   │   └── Footer.tsx      # Footer component
+│   │   ├── Dashboard.tsx    # Main dashboard (streamlined)
+│   │   ├── OIHeatmap.tsx    # OI heatmap visualization
+│   │   └── MarketData.tsx   # Real-time market data
 │   ├── pages/                # Next.js pages
-│   │   └── IntelligenceDashboardFinal.tsx # Intelligence dashboard (NEW)
+│   │   └── index.tsx        # Main dashboard page
 │   ├── styles/               # CSS styling
-│   │   └── IntelligenceLayout.css # Intelligence UI layout (NEW)
+│   │   └── globals.css      # Global styles with smooth scrolling
 │   ├── public/               # Static assets
 │   ├── hooks/                # React hooks
+│   │   ├── useLiveMarketData.ts # WebSocket data hook
+│   │   └── useWSStore.ts      # WebSocket state management
 │   └── utils/                # Utility functions
-└── docs/                   # Documentation
-    ├── PRODUCTION_OAUTH_SECURITY_REPORT.md  # Security audit report
-    ├── PRODUCTION_OAUTH_SECURITY_SUMMARY.md  # Security implementation summary
-    ├── PRODUCTIZED_INTELLIGENCE_SUMMARY.md  # Structural intelligence documentation
-    ├── INTELLIGENCE_UI_FINAL.md           # Intelligence UI documentation
-    └── test_oauth_flow.py           # OAuth automation testing tool
+├── docs/                   # Documentation
+│   ├── CLEANUP_SUMMARY.md           # Repository cleanup summary
+│   ├── PRODUCTION_OAUTH_SECURITY_REPORT.md  # Security audit report
+│   ├── PRODUCTION_OAUTH_SECURITY_SUMMARY.md  # Security implementation summary
+│   └── OPTION_CHAIN_REMOVAL_SUMMARY.md # UI optimization summary
+└── scripts/                # Development scripts
+    ├── dev.ps1              # PowerShell development script
+    └── dev.sh               # Bash development script
 ```
 
 ## Security Implementation
@@ -284,7 +336,12 @@ This starts:
 - `GET /api/v1/auth/upstox` - OAuth login URL
 - `GET /api/v1/auth/upstox/callback` - OAuth callback
 
-### Intelligence Endpoints (NEW)
+### System Monitoring Endpoints (NEW)
+- `GET /system/ws-status` - WebSocket connection status and health metrics
+- `GET /system/ai-status` - AI scheduler status and market state
+- `GET /health` - Application health check
+
+### Intelligence Endpoints
 - `WebSocket /ws/live-options/{symbol}` - Real-time structural intelligence
   - **Structural Regime**: Real-time regime classification
   - **Gamma Pressure Map**: Strike-level gamma exposure

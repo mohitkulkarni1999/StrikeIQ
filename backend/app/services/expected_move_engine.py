@@ -40,14 +40,24 @@ class ExpectedMoveEngine:
         """
         Compute expected move from option chain data
         """
-        # Validation Layer - Fail-Safe Mode
+        # FIX 8: Enhanced validation layer for safe processing
         if not data:
-            raise DataUnavailableError("No option chain data provided")
+            logger.warning("ExpectedMoveEngine: No data provided, returning safe default")
+            return self._get_safe_default_result()
         
         symbol = data.get("symbol", "NIFTY")
         spot = data.get("spot", 0)
         calls = data.get("calls", [])
         puts = data.get("puts", [])
+        
+        # Validate essential data
+        if not spot or spot <= 0:
+            logger.warning(f"ExpectedMoveEngine: Invalid spot price {spot}, returning safe default")
+            return self._get_safe_default_result(symbol)
+        
+        if not calls or not puts:
+            logger.warning("ExpectedMoveEngine: Empty option chain, returning safe default")
+            return self._get_safe_default_result(symbol)
         
         # Validate essential data
         if not calls or not puts:
@@ -62,7 +72,8 @@ class ExpectedMoveEngine:
             
             # Validate ATM options
             if not atm_call or not atm_put:
-                raise MissingATMError("ATM options not found for expected move calculation")
+                logger.warning("ExpectedMoveEngine: ATM options not found, returning safe default")
+                return self._get_safe_default_result(symbol)
             
             # Calculate premiums
             atm_call_premium = atm_call.get("last_price", 0) if atm_call else 0
@@ -71,7 +82,8 @@ class ExpectedMoveEngine:
             
             # Validate premiums
             if combined_premium <= 0:
-                raise MissingPremiumError("ATM premiums unavailable for expected move calculation")
+                logger.warning("ExpectedMoveEngine: Invalid ATM premiums, returning safe default")
+                return self._get_safe_default_result(symbol)
             
             # Calculate expected moves
             expected_move_1sd, expected_move_2sd = self._calculate_expected_moves(
@@ -108,23 +120,26 @@ class ExpectedMoveEngine:
             )
             
         except Exception as e:
-            logger.error(f"Error computing expected move: {e}")
-            # Return neutral result on error
-            return ExpectedMoveResult(
-                symbol=data.get("symbol", "NIFTY"),
-                spot=data.get("spot", 0),
-                atm_call_premium=0,
-                atm_put_premium=0,
-                combined_premium=0,
-                expected_move_1sd=0,
-                expected_move_2sd=0,
-                breakout_detected=False,
-                breakout_direction="none",
-                breakout_strength=0,
-                implied_volatility=0,
-                time_to_expiry=0,
-                timestamp=data.get("timestamp", "")
-            )
+            logger.error(f"ExpectedMoveEngine: Error computing expected move: {e}")
+            return self._get_safe_default_result(symbol)
+    
+    def _get_safe_default_result(self, symbol: str = "NIFTY") -> ExpectedMoveResult:
+        """Return safe default result for error conditions"""
+        return ExpectedMoveResult(
+            symbol=symbol,
+            spot=0.0,
+            atm_call_premium=0.0,
+            atm_put_premium=0.0,
+            combined_premium=0.0,
+            expected_move_1sd=0.0,
+            expected_move_2sd=0.0,
+            breakout_detected=False,
+            breakout_direction="none",
+            breakout_strength=0.0,
+            implied_volatility=0.0,
+            time_to_expiry=0.0,
+            timestamp=""
+        )
     
     def _find_atm_options(self, calls: List[Dict], puts: List[Dict], spot: float) -> Tuple[Optional[Dict], Optional[Dict]]:
         """Find ATM call and put options"""

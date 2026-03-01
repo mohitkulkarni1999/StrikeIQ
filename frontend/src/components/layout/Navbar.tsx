@@ -32,7 +32,7 @@ const HEARTBEAT_CSS = `
 
 const NAV_TABS = [
   { id: "dashboard", sectionId: "section-dashboard", label: "Dashboard", icon: BarChart2 },
-  { id: "chain", sectionId: "section-chain", label: "Options Chain", icon: Link2 },
+  { id: "chain", sectionId: "oi-heatmap", label: "Options Chain", icon: Link2 },
   { id: "analytics", sectionId: "section-analytics", label: "Analytics", icon: Activity },
   { id: "alerts", sectionId: "section-alerts", label: "Alerts", icon: Bell },
 ] as const;
@@ -131,7 +131,11 @@ export default function Navbar() {
     <>
       <style dangerouslySetInnerHTML={{ __html: HEARTBEAT_CSS }} />
 
-      <nav className="sticky top-0 z-50 w-full bg-[#0a0d1c] border-b border-white/5 backdrop-blur-xl">
+      <nav className="sticky top-0 z-50 w-full" style={{
+        background: 'rgba(18,18,18,0.7)',
+        backdropFilter: 'blur(10px)',
+        borderBottom: '1px solid rgba(255,255,255,0.05)'
+      }}>
         <div className="max-w-[1920px] mx-auto px-6">
           <div className="h-[60px] flex items-center justify-between">
 
@@ -181,15 +185,30 @@ export default function Navbar() {
             <div className="flex items-center gap-3">
 
               {/* Market */}
-              <div className={`px-3 py-1 rounded-full text-xs font-bold text-white ${marketColor}`}>
+              <div 
+                className="px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"
+                style={{
+                  background: marketOpen 
+                    ? 'rgba(34,197,94,0.12)' 
+                    : 'rgba(255,70,70,0.12)',
+                  color: marketOpen 
+                    ? '#4ade80' 
+                    : '#ff6b6b',
+                  border: marketOpen 
+                    ? '1px solid rgba(34,197,94,0.35)' 
+                    : '1px solid rgba(255,70,70,0.35)',
+                  borderRadius: '8px',
+                  padding: '4px 10px'
+                }}
+              >
                 {marketOpen ? (
-                  <span className="flex items-center gap-1">
+                  <>
                     <Wifi size={12} /> OPEN
-                  </span>
+                  </>
                 ) : (
-                  <span className="flex items-center gap-1">
+                  <>
                     <WifiOff size={12} /> CLOSED
-                  </span>
+                  </>
                 )}
               </div>
 

@@ -17,6 +17,8 @@ from app.services.gamma_pressure_map import GammaPressureMapEngine
 from app.services.flow_gamma_interaction import FlowGammaInteractionEngine
 from app.services.regime_confidence_engine import RegimeConfidenceEngine
 from app.services.expiry_magnet_model import ExpiryMagnetModel
+from ai.ai_orchestrator import AIOrchestrator
+from app.core.ws_manager import manager
 
 logger = logging.getLogger(__name__)
 
@@ -72,6 +74,9 @@ class LiveStructuralEngine:
         self.historical_data: Dict[str, List[Dict]] = {}  # For trend analysis
         self.previous_oi_snapshot: Dict[str, Dict] = {}  # For OI velocity calculation
         self._lock = asyncio.Lock()
+        
+        # Initialize AI orchestrator for intelligence analysis
+        self.ai_orchestrator = AIOrchestrator()
         
         # Constants for calculations
         self.CONTRACT_MULTIPLIER = 75  # NFO options contract multiplier
@@ -134,6 +139,9 @@ class LiveStructuralEngine:
             
             # Update historical data
             await self._update_historical_data(symbol, metrics)
+            
+            # Execute AI pipeline and broadcast intelligence
+            await self._run_ai_pipeline_and_broadcast(symbol, metrics)
             
             return metrics
             
@@ -949,3 +957,79 @@ class LiveStructuralEngine:
         except Exception as e:
             logger.error(f"Error classifying structural regime: {e}")
             return {"structural_regime": "unknown", "regime_confidence": 0}
+    
+    async def _run_ai_pipeline_and_broadcast(self, symbol: str, metrics: LiveMetrics) -> None:
+        """
+        Execute AI pipeline and broadcast intelligence to WebSocket clients
+        """
+        try:
+            # Run AI pipeline with LiveMetrics
+            ai_result = await asyncio.to_thread(self.ai_orchestrator.run_ai_pipeline, metrics)
+            
+            if ai_result:
+                # Build intelligence payload for frontend
+                intelligence_payload = {
+                    "symbol": symbol,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "regime": {
+                        "market_regime": ai_result.get("regime", "NEUTRAL"),
+                        "volatility_regime": metrics.volatility_regime,
+                        "trend_regime": ai_result.get("trend", "SIDEWAYS"),
+                        "confidence": ai_result.get("confidence", 0.0)
+                    },
+                    "bias": {
+                        "score": 0.0,  # Calculate from metrics if needed
+                        "label": "NEUTRAL",
+                        "confidence": 0.0,
+                        "signal": "NEUTRAL",
+                        "direction": "NONE",
+                        "strength": 0.0
+                    },
+                    "gamma": {
+                        "net_gamma": metrics.net_gamma or 0,
+                        "gamma_flip": metrics.gamma_flip_level or 0,
+                        "dealer_gamma": "NEUTRAL",
+                        "gamma_exposure": 0.0
+                    },
+                    "signals": {
+                        "stoploss_hunt": False,
+                        "trap_detection": False,
+                        "liquidity_event": False,
+                        "gamma_squeeze": False
+                    },
+                    "probability": {
+                        "expected_move": metrics.expected_move,
+                        "upper_1sd": metrics.upper_1sd,
+                        "lower_1sd": metrics.lower_1sd,
+                        "upper_2sd": metrics.upper_2sd,
+                        "lower_2sd": metrics.lower_2sd,
+                        "breach_probability": metrics.breach_probability,
+                        "range_hold_probability": metrics.range_hold_probability,
+                        "volatility_state": "normal"
+                    },
+                    "trade_suggestion": ai_result.get("trade_suggestion"),
+                    "reasoning": ai_result.get("explanation", [])
+                }
+                
+                # Broadcast intelligence to WebSocket clients
+                await manager.broadcast_json("market_data", {
+                    "type": "intelligence_update",
+                    "symbol": symbol,
+                    "intelligence": intelligence_payload
+                })
+                
+                logger.info(f"🧠 AI intelligence broadcasted for {symbol}: {ai_result.get('regime', 'UNKNOWN')}")
+            else:
+                logger.warning(f"⚠️ AI pipeline returned no result for {symbol}")
+                
+        except Exception as e:
+            logger.error(f"❌ AI pipeline execution failed for {symbol}: {e}")
+            # Still broadcast basic metrics without AI analysis
+            await manager.broadcast_json("market_data", {
+                "type": "metrics_update",
+                "symbol": symbol,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "spot": metrics.spot,
+                "expected_move": metrics.expected_move,
+                "volatility_regime": metrics.volatility_regime
+            })

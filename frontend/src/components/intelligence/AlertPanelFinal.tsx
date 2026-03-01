@@ -18,6 +18,24 @@ const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, maxVisible = 5 }) => {
   const [visibleAlerts, setVisibleAlerts] = useState<Alert[]>([]);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
 
+  // Add custom animation styles
+  React.useEffect(() => {
+    const style = document.createElement('style');
+    style.textContent = `
+      @keyframes critical-pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.7; }
+      }
+      .critical-alert {
+        animation: critical-pulse 1.5s ease-in-out infinite;
+      }
+    `;
+    document.head.appendChild(style);
+    return () => {
+      document.head.removeChild(style);
+    };
+  }, []);
+
   useEffect(() => {
     // Filter and sort alerts
     const filtered = alerts
@@ -31,15 +49,15 @@ const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, maxVisible = 5 }) => {
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'critical':
-        return 'bg-red-500/20 border-red-500/40 text-red-400';
+        return 'bg-red-500/10 border-red-500/30 text-red-400 border-l-4 border-l-red-500';
       case 'high':
-        return 'bg-orange-500/20 border-orange-500/40 text-orange-400';
+        return 'bg-orange-500/10 border-orange-500/30 text-orange-400 border-l-4 border-l-orange-500';
       case 'medium':
-        return 'bg-yellow-500/20 border-yellow-500/40 text-yellow-400';
+        return 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 border-l-4 border-l-yellow-500';
       case 'low':
-        return 'bg-blue-500/20 border-blue-500/40 text-blue-400';
+        return 'bg-blue-500/10 border-blue-500/30 text-blue-400 border-l-4 border-l-blue-500';
       default:
-        return 'bg-gray-500/20 border-gray-500/40 text-gray-400';
+        return 'bg-gray-500/10 border-gray-500/30 text-gray-400 border-l-4 border-l-gray-500';
     }
   };
 
@@ -59,10 +77,10 @@ const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, maxVisible = 5 }) => {
 
   const getSeverityBadge = (severity: string) => {
     const colors = {
-      critical: 'bg-red-500 text-white',
-      high: 'bg-orange-500 text-white',
-      medium: 'bg-yellow-500 text-black',
-      low: 'bg-blue-500 text-white'
+      critical: 'bg-red-500/20 text-red-300 border border-red-500/30',
+      high: 'bg-orange-500/20 text-orange-300 border border-orange-500/30',
+      medium: 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30',
+      low: 'bg-blue-500/20 text-blue-300 border border-blue-500/30'
     };
     
     return (
@@ -94,15 +112,10 @@ const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, maxVisible = 5 }) => {
 
   if (visibleAlerts.length === 0) {
     return (
-      <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-2xl p-6 shadow-lg">
-        <div className="flex items-center justify-center py-8">
-          <div className="text-center">
-            <div className="w-12 h-12 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-3">
-              <Info className="w-6 h-6 text-green-400" />
-            </div>
-            <div className="text-gray-400 font-medium">No Active Alerts</div>
-            <div className="text-sm text-gray-500 mt-1">Market conditions are normal</div>
-          </div>
+      <div className="bg-gray-900/50 backdrop-blur-sm border border-gray-800 rounded-xl p-3 shadow-lg">
+        <div className="flex items-center gap-2">
+          <div className="w-2 h-2 bg-green-400 rounded-full"></div>
+          <div className="text-sm text-gray-400">No Active Alerts</div>
         </div>
       </div>
     );
@@ -124,7 +137,7 @@ const AlertPanel: React.FC<AlertPanelProps> = ({ alerts, maxVisible = 5 }) => {
             className={`
               relative p-4 rounded-lg border transition-all duration-300
               ${getSeverityColor(alert.severity)}
-              ${index === 0 ? 'animate-pulse' : ''} // Pulse newest alert
+              ${alert.severity === 'critical' ? 'critical-alert' : ''} // Custom pulse for critical alerts
             `}
           >
             {/* Dismiss button */}

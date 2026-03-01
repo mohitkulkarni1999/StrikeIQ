@@ -46,7 +46,7 @@ const AIInterpretationPanel: React.FC<AIInterpretationPanelProps> = ({ intellige
 
   if (!intelligence || !interpretation) {
     return (
-      <div className="bg-[#111827] rounded-xl p-5 border border-[#1F2937] h-full">
+      <div className="trading-panel">
         <div className="flex items-center gap-3 mb-4">
           <Brain className="w-5 h-5 text-[#4F8CFF]" />
           <h3 className="text-lg font-semibold text-white">AI Interpretation</h3>
@@ -60,7 +60,7 @@ const AIInterpretationPanel: React.FC<AIInterpretationPanelProps> = ({ intellige
   }
 
   return (
-    <div className="bg-[#111827] rounded-xl p-6 border border-[#1F2937] h-full transition-all">
+    <div className="trading-panel">
       <div className="flex items-center justify-between mb-6">
         <div className="flex items-center gap-3">
           <Brain className="w-5 h-5 text-[#4F8CFF]" />
