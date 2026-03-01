@@ -1,6 +1,35 @@
 # StrikeIQ - Options Market Intelligence SaaS
 
-AI-powered options market intelligence platform for Indian markets (NIFTY & BANKNIFTY) with **production-grade OAuth 2.0 security implementation**, **proactive structural intelligence engine**, and **clean, optimized UI architecture**.
+AI-powered options market intelligence platform for Indian markets (NIFTY & BANKNIFTY) with **production-grade OAuth 2.0 security implementation**, **proactive structural intelligence engine**, and **modern, optimized tech stack**.
+
+## 🚀 Tech Stack
+
+### Frontend
+- **Next.js**: 16.1.6 (Latest stable)
+- **React**: 18.3.1 (Latest stable) 
+- **TypeScript**: 5.4.2
+- **TailwindCSS**: 3.4.3
+- **Node.js**: v24.13.0 (Latest stable)
+- **NPM**: 11.6.2 (Latest stable)
+- **Socket.io-client**: 4.7.5
+- **Axios**: 1.7.0
+- **Recharts**: 2.12.0
+- **Lucide React**: 0.379.0
+
+### Backend
+- **Python**: 3.13.12 (Latest stable)
+- **FastAPI**: 0.104.1
+- **Uvicorn**: 0.24.0
+- **SQLAlchemy**: 2.0.23
+- **Pydantic**: 2.5.0
+- **WebSockets**: 12.0
+- **python-socketio**: 5.10.0
+- **Pandas**: 2.1.4
+- **NumPy**: 1.25.2
+
+### Security Status
+- **Frontend**: 15 vulnerabilities (1 moderate, 14 high) - Needs attention
+- **Backend**: No critical vulnerabilities detected ✅
 
 ## Features
 
@@ -80,6 +109,11 @@ AI-powered options market intelligence platform for Indian markets (NIFTY & BANK
 - **Monitoring**: Comprehensive health checks and status reporting
 - **Testing**: Full test coverage for critical components
 - **Documentation**: Updated architecture and deployment guides
+
+### Upstox Integration Roadmap
+- **Current**: Basic REST API with OAuth 2.0
+- **In Progress**: V3 protobuf WebSocket feed integration
+- **Planned**: Binary data parsing and streaming upgrades for real-time market data
 
 ## Architecture
 
@@ -253,6 +287,46 @@ StrikeIQ requires authentication with Upstox to access live market data.
 - **Market Closed**: Shows appropriate banner when market is closed
 - **Data Unavailable**: Shows error message if API fails during market hours
 
+## Quick Start
+
+### Prerequisites
+- Python 3.13.12+
+- Node.js 24.13.0+
+- Upstox API credentials
+
+### Setup Steps
+
+1. **Clone the repository**
+   ```bash
+   git clone <repository-url>
+   cd StrikeIQ
+   ```
+
+2. **Backend Setup**
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   cp .env.example .env
+   # Edit .env with your Upstox credentials
+   python main.py
+   ```
+
+3. **Frontend Setup**
+   ```bash
+   cd frontend
+   npm install
+   npm run dev
+   ```
+
+4. **Access the Application**
+   - Frontend: http://localhost:3000
+   - Backend API: http://localhost:8000
+   - API Docs: http://localhost:8000/docs
+
+### Authentication Required
+
+StrikeIQ requires authentication with Upstox to access live market data.
+
 ## Environment Variables
 
 Create `.env` file in `backend/` directory:
@@ -280,10 +354,24 @@ npm run build                    # Build for production
 npm start                        # Start production server
 ```
 
-### Intelligence Dashboard (NEW)
+### Testing
+```bash
+# Backend Tests
+cd backend
+python -m pytest tests/          # Run all tests
+python test_websocket.py         # Test WebSocket connections
+python test_ai_scheduler.py      # Test AI scheduler
+
+# Frontend Tests
+cd frontend
+npm test                         # Run frontend tests
+npm run test:coverage           # Run with coverage
+```
+
+### Intelligence Dashboard
 ```bash
 # Access the new intelligence dashboard
-# Navigate to: http://localhost:3000/intelligence
+# Navigate to: http://localhost:3000
 # Features Bloomberg-grade structural intelligence interface
 ```
 
@@ -315,8 +403,37 @@ npm start                        # Start production server
 - Frontend logs: Browser console (F12)
 - API testing: http://localhost:8000/docs
 
-## Docker Deployment
+## Performance & Security
 
+### Performance Analysis
+- **Frontend**: Uses React 18 features, optimization patterns implemented
+- **Backend**: Mixed asyncio/threading patterns, potential blocking calls identified
+- **WebSockets**: Basic implementation, being upgraded to Upstox V3 protobuf
+- **Database**: PostgreSQL with SQLAlchemy ORM, connection pooling enabled
+
+### Security Status
+- **OAuth 2.0**: Production-grade implementation with A+ security score (98/100)
+- **Frontend Vulnerabilities**: 15 vulnerabilities (1 moderate, 14 high) - Requires immediate attention
+- **Backend**: No critical vulnerabilities detected
+- **Rate Limiting**: IP-based throttling (5 requests/minute) implemented
+- **Data Protection**: Backend-only token storage, no sensitive data logging
+
+### Security Recommendations
+1. **Address Frontend Vulnerabilities**: Update npm packages to resolve security issues
+2. **Regular Security Audits**: Implement automated security scanning
+3. **Dependency Updates**: Keep all packages updated to latest stable versions
+4. **Environment Security**: Use environment-specific configuration management
+
+## Deployment
+
+### Development Environment
+```bash
+# Using provided scripts
+./scripts/dev.sh    # Linux/Mac
+./scripts/dev.ps1   # Windows PowerShell
+```
+
+### Production Deployment
 ```bash
 docker-compose up -d
 ```
@@ -327,6 +444,14 @@ This starts:
 - Backend API (port 8000)
 - Frontend (port 3000)
 - Nginx reverse proxy (port 80)
+
+### Production Checklist
+- [ ] Update frontend dependencies to fix security vulnerabilities
+- [ ] Configure environment-specific variables
+- [ ] Set up SSL certificates
+- [ ] Configure monitoring and logging
+- [ ] Set up backup strategies
+- [ ] Performance testing under load
 
 ## API Endpoints
 
@@ -416,6 +541,52 @@ StrikeIQ has evolved from a **reactive market data dashboard** to a **proactive 
 
 **🎯 Result**: StrikeIQ now provides actionable trading intelligence, not just market data.
 
-## License
+## 📚 Documentation
+
+### Key Documents
+- [System Architecture](./SYSTEM_ARCHITECTURE_AUDIT.md) - Complete system architecture overview
+- [Security Implementation](./AUTH_SYSTEM_VALIDATION_REPORT.md) - OAuth 2.0 security details
+- [AI System Summary](./AI_SYSTEM_SUMMARY.md) - AI engines and capabilities
+- [Test Results](./TEST_RESULTS.md) - Comprehensive test coverage report
+- [API Reference](./API_REFERENCE.md) - Complete API documentation
+
+### Development Guides
+- [Setup Guide](./scripts/setup.sh) - Automated setup script
+- [Development Workflow](./.windsurf/workflows/) - Development workflows and processes
+- [Chaos Testing](./CHAOS_TEST_SUITE_README.md) - System resilience testing
+
+## 🤝 Contributing
+
+### Development Workflow
+1. Fork the repository
+2. Create a feature branch
+3. Make changes with proper testing
+4. Run the test suite
+5. Submit a pull request
+
+### Code Standards
+- **Python**: Follow PEP 8, use type hints
+- **TypeScript**: Use strict mode, proper typing
+- **Testing**: Maintain >90% test coverage
+- **Documentation**: Update README and relevant docs
+
+## 📞 Support
+
+### Getting Help
+- **Issues**: Create GitHub issues for bugs
+- **Features**: Request features via GitHub discussions
+- **Documentation**: Check docs/ directory first
+- **API Testing**: Use http://localhost:8000/docs
+
+### Community
+- **Discussions**: GitHub Discussions for questions
+- **Issues**: Bug reports and feature requests
+- **Contributions**: Pull requests welcome
+
+## 📄 License
 
 MIT License - see LICENSE file for details
+
+---
+
+**StrikeIQ** - Transforming market data into actionable intelligence 🚀
