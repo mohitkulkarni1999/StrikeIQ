@@ -3,6 +3,7 @@
 import React, { useState, useEffect, memo } from 'react';
 import { Activity, Database } from 'lucide-react';
 import { useLiveMarketData } from '../hooks/useLiveMarketData';
+import { useExpirySelector } from '../hooks/useExpirySelector';
 import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
 import DebugBadge from './DebugBadge';
 import AIInterpretationPanel from './AIInterpretationPanel';
@@ -29,8 +30,16 @@ interface DashboardProps { initialSymbol?: string; }
 
 export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
   const [symbol] = useState(initialSymbol);
-  const [expiryList, setExpiryList] = useState<string[]>([]);
-  const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
+
+  // Use expiry selector hook
+  const {
+    expiryList,
+    selectedExpiry,
+    loadingExpiries,
+    expiryError,
+    handleExpiryChange,
+    optionChainConnected
+  } = useExpirySelector(symbol);
 
   const { data, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
   
@@ -114,14 +123,6 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
     };
   }, []);
 
-  // Populate expiry list from data
-  useEffect(() => {
-    if (data?.available_expiries && data.available_expiries.length > 0) {
-      setExpiryList(data.available_expiries);
-      if (!selectedExpiry) setSelectedExpiry(data.available_expiries[0]);
-    }
-  }, [data?.available_expiries, selectedExpiry]);
-
   const safeError = typeof error === 'string' ? error : null;
   const modeLabel = mode === 'live' ? 'LIVE' : mode === 'snapshot' ? 'SNAPSHOT' : mode === 'error' ? 'HALTED' : 'OFFLINE';
   const modeColor = mode === 'live' ? '#4ade80' : mode === 'snapshot' ? '#60a5fa' : '#f87171';
@@ -195,32 +196,6 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
             mode={mode}
           />
         </div>
-
-        {/* ── Expiry selector ─────────────────────────────────────────────── */}
-        {expiryList.length > 0 && (
-          <div className="full-width" style={{ gridColumn: '1 / -1' }}>
-            <div className="trading-panel">
-              <div className="rounded-2xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center gap-3" style={CARD}>
-                <label
-                  className="text-[10px] font-mono font-bold tracking-widest uppercase whitespace-nowrap shrink-0"
-                  style={{ color: 'rgba(148,163,184,0.55)' }}
-                >
-                  Expiry Date
-                </label>
-                <select
-                  value={selectedExpiry || ''}
-                  onChange={(e) => setSelectedExpiry(e.target.value)}
-                  className="flex-1 text-white text-sm font-mono px-3 py-2 rounded-xl outline-none transition-all cursor-pointer"
-                  style={{ background: 'rgba(0,0,0,0.35)', border: '1px solid rgba(0,229,255,0.15)', color: '#e2e8f0' }}
-                >
-                  {expiryList.map((exp) => (
-                    <option key={exp} value={exp}>{exp}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
-          </div>
-        )}
 
         
         {/* ROW 5 — OI Heatmap (full width horizontal scroll) */}

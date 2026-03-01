@@ -13,7 +13,14 @@ interface TickerStripProps {
     modeColor: string;
 }
 
-export function TickerStrip({ symbol, data, effectiveSpot, mode, modeLabel, modeColor }: TickerStripProps) {
+export function TickerStrip({ 
+    symbol, 
+    data, 
+    effectiveSpot, 
+    mode, 
+    modeLabel, 
+    modeColor
+}: TickerStripProps) {
     const changePositive = (data?.change ?? 0) >= 0;
 
     return (
@@ -74,7 +81,7 @@ export function TickerStrip({ symbol, data, effectiveSpot, mode, modeLabel, mode
                     style={{ color: changePositive ? '#4ade80' : '#f87171' }}
                 >
                     {changePositive ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
-                    {changePositive ? '+' : ''}{data?.change_percent?.toFixed(2) ?? '0.00'}%
+                    {changePositive ? '+' : ''}{((data as any)?.change_percent ?? 0).toFixed(2)}%
                 </div>
 
                 <div className="flex-1 hidden sm:block" />

@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useWSStore } from "@/core/ws/wsStore"
+import { useOptionChainStore } from "@/core/ws/optionChainStore"
 import { clearWSInitialized } from "@/core/ws/wsInitController"
 import { throttle } from "@/utils/throttle"
 
@@ -7,6 +8,8 @@ export interface LiveMarketData {
   symbol: string
   spot: number
   timestamp: string
+  change?: number
+  change_percent?: number
   available_expiries?: string[]
   optionChain?: {
     symbol: string
@@ -43,11 +46,16 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
 
   const {
     spot,
-    optionChain,
     lastUpdate,
     connected,
     connect
   } = useWSStore()
+
+  const {
+    optionChainData,
+    optionChainLastUpdate,
+    optionChainConnected
+  } = useOptionChainStore()
 
   /*
   -------------------------------
@@ -84,25 +92,25 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
 
   useEffect(() => {
 
-    if (spot === 0) return
+    if (spot === 0 && !optionChainData) return
 
     const transformed: LiveMarketData = {
 
       symbol,
 
-      spot,
+      spot: spot || optionChainData?.spot || 0,
 
-      timestamp: new Date(lastUpdate).toISOString(),
+      timestamp: new Date(lastUpdate || optionChainLastUpdate).toISOString(),
 
       available_expiries: [],
 
-      optionChain: optionChain
+      optionChain: optionChainData
         ? {
-            symbol,
-            spot,
-            expiry: expiry || "",
-            calls: optionChain.calls || [],
-            puts: optionChain.puts || []
+            symbol: optionChainData.symbol || symbol,
+            spot: optionChainData.spot || spot,
+            expiry: optionChainData.expiry || expiry || "",
+            calls: optionChainData.calls || [],
+            puts: optionChainData.puts || []
           }
         : null
 
@@ -111,7 +119,7 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
     // Use throttled update instead of direct setState
     throttledSetData(transformed)
 
-  }, [spot, optionChain, lastUpdate, symbol, expiry])
+  }, [spot, optionChainData, lastUpdate, optionChainLastUpdate, symbol, expiry])
 
   /*
   -------------------------------

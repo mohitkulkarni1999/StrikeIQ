@@ -1,8 +1,10 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import React, { memo, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { BarChart3, TrendingUp, TrendingDown, Calendar } from 'lucide-react';
 import api from '../lib/api';
 import { useWSStore } from '../core/ws/wsStore';
+import { useOptionChainStore } from '../core/ws/optionChainStore';
 import { useDashboardData } from '../hooks/useDashboardData';
+import { useExpirySelector } from '../hooks/useExpirySelector';
 
 interface OIData {
   strike: number;
@@ -24,6 +26,16 @@ interface OIHeatmapProps {
 
 const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
   
+  // Use expiry selector hook
+  const {
+    expiryList,
+    selectedExpiry,
+    loadingExpiries,
+    expiryError,
+    handleExpiryChange,
+    optionChainConnected
+  } = useExpirySelector(symbol);
+
   // Use global store data
   const { calls, puts, connected } = useDashboardData();
 
@@ -32,13 +44,14 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
   const [spotPrice, setSpotPrice] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   
-  // Read from Zustand store for fallback
+  // Read from Zustand stores for fallback
   const { liveData: wsLiveData, optionChainSnapshot, spot } = useWSStore();
+  const { optionChainData } = useOptionChainStore();
   
-  // Use structured data from global store, fallback to legacy data
+  // Use structured data from global store, fallback to option chain store, then legacy data
   const actualLiveData = calls.length > 0 || puts.length > 0 
     ? { calls, puts, spot }
-    : wsLiveData || optionChainSnapshot;
+    : optionChainData || wsLiveData || optionChainSnapshot;
 
   // 🔥 PCR FALLBACK CALCULATION (FRONTEND-ONLY FIX)
   const calculatePCR = useCallback((data: any) => {
@@ -50,34 +63,22 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
       sum + (put.open_interest || put.oi || 0), 0);
     
     return totalCallOI > 0 ? totalPutOI / totalCallOI : 0;
-  }, [actualLiveData]);
+  }, []);
 
   // Use backend PCR if valid, otherwise fallback to calculated PCR
-  const pcr = actualLiveData?.pcr && actualLiveData.pcr > 0
-    ? actualLiveData.pcr
-    : calculatePCR(actualLiveData);
+  const pcr = useMemo(() => {
+    return actualLiveData?.pcr && actualLiveData.pcr > 0
+      ? actualLiveData.pcr
+      : calculatePCR(actualLiveData);
+  }, [actualLiveData?.pcr, calculatePCR]);
 
-  // 🔥 PCR DEBUG LOGGING
-  console.log("🔥 PCR ANALYSIS:", {
-    backendPCR: actualLiveData?.pcr,
-    calculatedPCR: calculatePCR(actualLiveData),
-    effectivePCR: pcr,
-    hasValidCalls: !!(actualLiveData?.calls?.length),
-    hasValidPuts: !!(actualLiveData?.puts?.length),
-    totalCallOI: actualLiveData?.calls?.reduce((s: number, c: any) => s + (c.open_interest || c.oi || 0), 0),
-    totalPutOI: actualLiveData?.puts?.reduce((s: number, p: any) => s + (p.open_interest || p.oi || 0), 0)
-  });
+  // Remove render-time logging to prevent memory growth
 
   const tableRef = useRef<HTMLDivElement>(null);
   const atmRowRef = useRef<HTMLTableRowElement>(null);
   const hasScrolledRef = useRef<boolean>(false);
 
-  // DEBUG: Log props and structure
-  console.log("OIHeatmap props:", { symbol });
-  console.log("WS LIVE DATA FROM STORE:", wsLiveData);
-  console.log("OPTION_CHAIN_SNAPSHOT FROM STORE:", optionChainSnapshot);
-  console.log("ACTUAL LIVE DATA:", actualLiveData);
-  console.log("LIVE DATA STRUCTURE:", actualLiveData ? Object.keys(actualLiveData) : 'null');
+  // Remove render-time logging to prevent memory growth
 
   // Reset scroll flag when symbol changes
   useEffect(() => {
@@ -87,13 +88,7 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
   // Process live data from WebSocket (includes chain snapshot)
   useEffect(() => {
     if (actualLiveData && "calls" in actualLiveData && "puts" in actualLiveData && Array.isArray(actualLiveData.calls)) {
-      // Add console.log for WS payload verification
-      console.log("🔥 WS PAYLOAD VERIFICATION:", actualLiveData);
-      console.log("CALLS ARRAY:", actualLiveData.calls);
-      console.log("PUTS ARRAY:", actualLiveData.puts);
-      console.log("SPOT PRICE:", actualLiveData.spot_price);
-      console.log("ATM STRIKE:", actualLiveData.atm_strike);
-      console.log("TIMESTAMP:", actualLiveData._ts);
+      // Process live data without render-time logging
       
       // Use spot price from live data (new field name)
       setSpotPrice(actualLiveData.spot_price);
@@ -157,26 +152,16 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
         return diff <= 500;   // keep ±500 window
       });
 
-      console.log("UNIFIED STRIKE MAP:", strikeMap);
-      console.log("TOTAL STRIKES:", transformedData.length, "→ FILTERED TO:", filteredData.length);
-      console.log("SETTING OI DATA WITH:", filteredData.length, "ROWS");
-      console.log("SAMPLE DATA:", filteredData.slice(0, 3));
+      // Process strike transformation without logging
       setOiData(filteredData);
       setLoading(false);
       setError(null);
     } else {
-      console.log("NO VALID CALLS/PUTS DATA");
-      console.log("actualLiveData exists:", !!actualLiveData);
-      console.log("calls exists:", !!actualLiveData?.calls);
-      console.log("puts exists:", !!actualLiveData?.puts);
-      console.log("calls is array:", Array.isArray(actualLiveData?.calls));
+      // Handle invalid data silently
     }
   }, [actualLiveData]);
 
-  // Debug render logging
-  useEffect(() => {
-    console.log("🎯 RENDERING OI DATA:", oiData.length, "ROWS");
-  }, [oiData]);
+  // Remove render-time logging to prevent memory growth
 
   if (loading && oiData.length === 0) {
     return (
@@ -211,21 +196,66 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
       width: '100%'
     }}>
       <div className="bg-[#111827] border border-[#1F2937] rounded-xl p-5 min-h-[600px]" style={{ minWidth: '100%' }}>
-        <div className="flex items-center justify-between mb-6">
+        {/* Header with controls */}
+        <div className="flex flex-wrap items-center justify-between mb-6 gap-4">
           <div className="flex items-center gap-4">
             <h3 className="text-xl font-bold text-white">OI Heatmap</h3>
             {loading && (
               <div className="w-4 h-4 border-2 border-[#4F8CFF] border-t-transparent rounded-full animate-spin"></div>
             )}
           </div>
-          <div className="flex items-center gap-6">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase">
-              <div className="w-3 h-3 bg-[#FF4D4F]/40 border border-[#FF4D4F]/60 rounded"></div>
-              <span className="text-gray-400">Calls</span>
+          
+          {/* Controls section */}
+          <div className="flex flex-wrap items-center gap-4">
+            {/* Symbol display */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm font-mono text-gray-400">Symbol:</span>
+              <span className="text-sm font-bold text-white bg-white/10 px-2 py-1 rounded">{symbol}</span>
             </div>
-            <div className="flex items-center gap-2 text-xs font-bold uppercase">
-              <div className="w-3 h-3 bg-[#00FF9F]/40 border border-[#00FF9F]/60 rounded"></div>
-              <span className="text-gray-400">Puts</span>
+            
+            {/* Expiry Selector */}
+            {expiryList.length > 0 && (
+              <div className="flex items-center gap-2">
+                <Calendar className="w-4 h-4" style={{ color: 'rgba(148,163,184,0.7)' }} />
+                <select
+                  value={selectedExpiry || ''}
+                  onChange={(e) => handleExpiryChange(e.target.value)}
+                  disabled={loadingExpiries}
+                  className="text-white text-xs font-mono px-2 py-1 rounded-lg outline-none transition-all cursor-pointer disabled:opacity-50"
+                  style={{ 
+                    background: 'rgba(0,0,0,0.3)', 
+                    border: '1px solid rgba(0,229,255,0.2)', 
+                    color: '#e2e8f0',
+                    minWidth: '120px'
+                  }}
+                >
+                  {loadingExpiries ? (
+                    <option>Loading...</option>
+                  ) : (
+                    expiryList.map((exp) => (
+                      <option key={exp} value={exp}>{exp}</option>
+                    ))
+                  )}
+                </select>
+                {optionChainConnected && (
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-70" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-blue-400" />
+                  </span>
+                )}
+              </div>
+            )}
+            
+            {/* Legend */}
+            <div className="flex items-center gap-6">
+              <div className="flex items-center gap-2 text-xs font-bold uppercase">
+                <div className="w-3 h-3 bg-[#FF4D4F]/40 border border-[#FF4D4F]/60 rounded"></div>
+                <span className="text-gray-400">Calls</span>
+              </div>
+              <div className="flex items-center gap-2 text-xs font-bold uppercase">
+                <div className="w-3 h-3 bg-[#00FF9F]/40 border border-[#00FF9F]/60 rounded"></div>
+                <span className="text-gray-400">Puts</span>
+              </div>
             </div>
           </div>
         </div>
@@ -355,4 +385,4 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
   );
 };
 
-export default OIHeatmap;
+export default memo(OIHeatmap);

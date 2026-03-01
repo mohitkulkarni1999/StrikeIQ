@@ -15,21 +15,19 @@ wsHeartbeat: boolean
 
 spot: number
 
-optionChain: {
-calls: any[]
-puts: any[]
-}
-
-lastUpdate: number
-
-liveData: any
+marketData: any
 optionChainSnapshot: any
+liveData: any
 wsLiveData: any
 lastMessage: any
-marketData: any
+lastUpdate: number
 
 reconnectAttempts: number
 maxReconnectAttempts: number
+
+// Update throttling properties
+_lastChainUpdate: number
+_THROTTLE_MS: number
 
 connect: (symbol: string, expiry: string) => WebSocket | null
 disconnect: () => void
@@ -63,21 +61,19 @@ wsHeartbeat: false,
 
 spot: 0,
 
-optionChain: {
-calls: [],
-puts: []
-},
-
-lastUpdate: 0,
-
-liveData: null,
+marketData: null,
 optionChainSnapshot: null,
+liveData: null,
 wsLiveData: null,
 lastMessage: null,
-marketData: null,
+lastUpdate: 0,
 
 reconnectAttempts: 0,
 maxReconnectAttempts: 5,
+
+// Update throttling - max 20 updates per second
+_lastChainUpdate: 0,
+_THROTTLE_MS: 50,
 
 // ================================
 // CONNECT WEBSOCKET
@@ -240,8 +236,6 @@ if (message.type === "market_tick" && message.data) {
 
   })
 
-  console.log("📈 LIVE TICK:", tick)
-
   return
 }
 
@@ -252,26 +246,23 @@ if (message.type === "market_tick" && message.data) {
 
 if (message.type === "chain_update" && message.data) {
 
+  const now = Date.now()
+  const store = get()
+  
+  // Throttle updates to max 20 per second
+  if (now - store._lastChainUpdate < store._THROTTLE_MS) {
+    return
+  }
+  
   const data = message.data
 
   set({
-
     spot: data.spot ?? 0,
-
-    optionChain: {
-      calls: data.calls ?? [],
-      puts: data.puts ?? []
-    },
-
-    lastUpdate: Date.now(),
-
-    liveData: data,
+    marketData: data,
     optionChainSnapshot: data,
-    wsLiveData: data
-
+    lastUpdate: now,
+    _lastChainUpdate: now
   })
-
-  console.log("📊 OPTION CHAIN UPDATE")
 
   return
 }
@@ -283,24 +274,21 @@ if (message.type === "chain_update" && message.data) {
 
 if (message.calls && message.puts) {
 
+  const now = Date.now()
+  const store = get()
+  
+  // Throttle updates to max 20 per second
+  if (now - store._lastChainUpdate < store._THROTTLE_MS) {
+    return
+  }
+
   set({
-
     spot: message.spot ?? 0,
-
-    optionChain: {
-      calls: message.calls,
-      puts: message.puts
-    },
-
-    lastUpdate: Date.now(),
-
-    liveData: message,
+    marketData: message,
     optionChainSnapshot: message,
-    wsLiveData: message
-
+    lastUpdate: now,
+    _lastChainUpdate: now
   })
-
-  console.log("📊 DIRECT OPTION CHAIN")
 
   return
 }

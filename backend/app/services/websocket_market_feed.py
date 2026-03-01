@@ -3,6 +3,7 @@ import json
 import logging
 from typing import Optional
 from datetime import datetime
+from collections import deque
 
 import httpx
 import websockets
@@ -55,13 +56,13 @@ class WebSocketMarketFeed:
         self.running = False
         self._connecting = False
 
-        self._message_queue = asyncio.Queue(maxsize=2000)
+        self._message_queue = deque(maxlen=2000)
 
         self._recv_task: Optional[asyncio.Task] = None
         self._process_task: Optional[asyncio.Task] = None
         self._heartbeat_task: Optional[asyncio.Task] = None
 
-        self._client = httpx.AsyncClient(timeout=10)
+        self._client = httpx.AsyncClient(timeout=30)
 
     async def start(self):
 
@@ -234,8 +235,8 @@ class WebSocketMarketFeed:
                     message = message.encode()
 
                 try:
-                    self._message_queue.put_nowait(message)
-                except asyncio.QueueFull:
+                    self._message_queue.append(message)
+                except Exception:
                     logger.warning("WS queue full → dropping tick")
 
             except Exception as e:
@@ -252,7 +253,11 @@ class WebSocketMarketFeed:
 
             try:
 
-                raw = await self._message_queue.get()
+                if self._message_queue:
+                    raw = self._message_queue.popleft()
+                else:
+                    await asyncio.sleep(0.001)
+                    continue
 
                 ticks = await asyncio.to_thread(parse_upstox_feed, raw)
 
@@ -316,7 +321,7 @@ class WebSocketMarketFeed:
 
         await self._cancel_tasks()
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(5)
 
         if self.running:
 
@@ -324,6 +329,8 @@ class WebSocketMarketFeed:
 
             if success:
                 self._start_tasks()
+            else:
+                logger.warning("Reconnect failed, will retry in 5 seconds")
 
     async def disconnect(self):
 

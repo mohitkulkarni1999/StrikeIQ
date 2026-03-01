@@ -113,40 +113,54 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
         
         logger.info(f"✅ Expiry validated: {symbol_upper}:{expiry}")
         
-        # PER EXPIRY BUILDER
+        # PER EXPIRY BUILDER - OFFLOAD TO BACKGROUND TASK
         # Convert expiry string to date object for registry compatibility
         expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
-        builder = await chain_manager.get_builder(symbol, expiry_date)
-
-        # START BUILDER ONLY ONCE
-        await builder.start()
+        
+        # Start builder in background task to prevent blocking WebSocket handshake
+        builder_task = asyncio.create_task(
+            chain_manager.get_builder(symbol, expiry_date)
+        )
+        
+        # Don't await here - let it run in background
+        # We'll handle the builder when it's ready
+        builder = None
 
         # REGISTER CLIENT
         await manager.connect(key, websocket)
 
         logger.info(f"WS REGISTERED → {key}")
 
-        # 🔥 CRITICAL FIX: Send initial chain state even if empty
-        try:
-            chain_state = builder.get_latest_option_chain()
-            if chain_state:
-                chain_data = chain_state.build_final_chain()
-                logger.info(f"🔍 [INITIAL CHAIN] {symbol_upper}: spot={chain_data.get('spot')}, spot_price={chain_data.get('spot_price')}")
-                await websocket.send_json({
-                    "type": "chain_update",
-                    "data": chain_data
-                })
-                logger.info(f"📤 SENT INITIAL CHAIN: {len(chain_data.get('calls', []))} calls, {len(chain_data.get('puts', []))} puts")
-            else:
-                await websocket.send_json({
-                    "type": "waiting",
-                    "message": "Waiting for market data...",
-                    "symbol": symbol_upper,
-                    "expiry": expiry
-                })
-                logger.info(f"📤 SENT WAITING MESSAGE for {key}")
-        except Exception as e:
-            logger.error(f"Failed to send initial chain: {e}")
+        # 🔥 CRITICAL FIX: Handle builder in background
+        async def handle_builder_ready():
+            try:
+                builder = await builder_task
+                if builder:
+                    await builder.start()
+                    
+                    # Send initial chain state
+                    chain_state = builder.get_latest_option_chain()
+                    if chain_state:
+                        chain_data = chain_state.build_final_chain()
+                        logger.info(f"🔍 [INITIAL CHAIN] {symbol_upper}: spot={chain_data.get('spot')}, spot_price={chain_data.get('spot_price')}")
+                        await websocket.send_json({
+                            "type": "chain_update",
+                            "data": chain_data
+                        })
+                        logger.info(f"📤 SENT INITIAL CHAIN: {len(chain_data.get('calls', []))} calls, {len(chain_data.get('puts', []))} puts")
+                    else:
+                        await websocket.send_json({
+                            "type": "waiting",
+                            "message": "Waiting for market data...",
+                            "symbol": symbol_upper,
+                            "expiry": expiry
+                        })
+                        logger.info(f"📤 SENT WAITING MESSAGE for {key}")
+            except Exception as e:
+                logger.error(f"Failed to handle builder: {e}")
+        
+        # Start background task for builder handling
+        asyncio.create_task(handle_builder_ready())
 
         try:
             while True:
@@ -162,15 +176,27 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
             logger.info(f"WS DISCONNECTED → {key}")
 
             await manager.disconnect(key, websocket)
-
-            if builder:
-                await builder.stop_tasks()
+        
+        # Stop builder tasks if builder was created
+        if 'builder_task' in locals() and builder_task and not builder_task.done():
+            try:
+                builder = await builder_task
+                if builder:
+                    await builder.stop_tasks()
+            except Exception:
+                pass
 
     except Exception as e:
 
         logger.error(f"WS ERROR → {key}: {e}")
 
-        if builder:
-            await builder.stop_tasks()
+        # Stop builder tasks if builder was created
+        if 'builder_task' in locals() and builder_task and not builder_task.done():
+            try:
+                builder = await builder_task
+                if builder:
+                    await builder.stop_tasks()
+            except Exception:
+                pass
 
         await manager.disconnect(key, websocket)

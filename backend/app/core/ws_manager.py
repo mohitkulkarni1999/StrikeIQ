@@ -46,7 +46,7 @@ class WSConnectionManager:
                 del self.active_connections[key]
 
             logger.info(
-                f"🔴 WS DISCONNECTED → {key} → remaining={len(self.active_connections.get(key, []))}"
+                f" WS DISCONNECTED → {key} → remaining={len(self.active_connections.get(key, []))}"
             )
 
     # ================= BROADCAST =================
@@ -60,24 +60,23 @@ class WSConnectionManager:
                 return
 
             connections = list(self.active_connections[key])
-            logger.info(f"📡 Broadcasting to {len(connections)} clients on channel '{key}'")
 
         dead_connections = []
-        sent_count = 0
-
+        
+        # Parallel broadcast using asyncio.gather for 1000+ concurrent connections
+        send_tasks = []
         for ws in connections:
-
-            try:
-
-                await ws.send_json(message)
-
+            send_tasks.append(self._send_to_client(ws, message))
+        
+        results = await asyncio.gather(*send_tasks, return_exceptions=True)
+        
+        sent_count = 0
+        for i, result in enumerate(results):
+            if isinstance(result, Exception):
+                dead_connections.append(connections[i])
+                logger.warning(f"❌ Failed to send to client: {result}")
+            else:
                 sent_count += 1
-                logger.debug(f"✅ Message sent to client {sent_count}")
-
-            except Exception as e:
-
-                logger.warning(f"❌ Failed to send to client: {e}")
-                dead_connections.append(ws)
 
         # cleanup dead sockets
         if dead_connections:
@@ -93,11 +92,19 @@ class WSConnectionManager:
                     del self.active_connections[key]
 
         logger.info(
-            f"📡 BROADCAST → {key} → sent={sent_count} dead={len(dead_connections)}"
+            f" BROADCAST → {key} → sent={sent_count} dead={len(dead_connections)} total={len(connections)}"
         )
         
         # Log the actual message being broadcasted
-        logger.debug(f"📨 Message broadcasted: {message}")
+        logger.debug(f" Message broadcasted: {message}")
+
+    async def _send_to_client(self, ws: WebSocket, message: dict):
+        """Helper method to send message to a single client"""
+        try:
+            await ws.send_json(message)
+            return True
+        except Exception as e:
+            return e
 
 
 # singleton instance
