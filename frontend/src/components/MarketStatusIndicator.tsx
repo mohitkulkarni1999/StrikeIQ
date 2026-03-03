@@ -16,7 +16,11 @@ export default function MarketStatusIndicator() {
 
   console.log('🔍 MarketStatusIndicator: Current marketOpen value:', marketOpen)
 
-  if (marketOpen === true) {
+  if (marketOpen === undefined) {
+    statusText = "Checking Market...";
+    statusColor = "bg-gray-500";
+    statusIcon = "🔄";
+  } else if (marketOpen === true) {
     statusText = "Market Open";
     statusColor = "bg-green-500";
     statusIcon = "🟢";

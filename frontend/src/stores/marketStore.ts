@@ -20,7 +20,7 @@ interface MarketStore {
   setSpot: (spot: number) => void;
   setOptionChain: (chain: any) => void;
   setAISignals: (signals: any[]) => void;
-  updateMarketData: (data: Partial<MarketData> & { connected: boolean; marketOpen: boolean; lastUpdate: string }) => void;
+  updateMarketData: (data: Partial<MarketData> & { connected: boolean; lastUpdate: string; marketOpen?: boolean }) => void;
 }
 
 export const useMarketStore = create<MarketStore>((set) => ({

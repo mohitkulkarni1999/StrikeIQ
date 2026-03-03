@@ -4,7 +4,7 @@ from typing import Dict, Any
 from ...services.market_data.market_dashboard_service import MarketDashboardService
 from ...models.database import get_db
 from ...core.config import settings
-from ...services.instrument_registry import get_instrument_registry, instrument_registry
+from ...services.instrument_registry import get_instrument_registry
 import logging
 from datetime import datetime
 

@@ -14,11 +14,11 @@ const WS_URL = "ws://localhost:8000/ws/market"
 export function connectMarketWS() {
 
   if (
-    (window as any).STRIKEIQ_WS_INSTANCE &&
-    (window as any).STRIKEIQ_WS_INSTANCE.readyState === WebSocket.OPEN
+    (window as any).__strikeiq_ws &&
+    (window as any).__strikeiq_ws.readyState === WebSocket.OPEN
   ) {
     console.log("🔒 Returning existing WebSocket instance")
-    return (window as any).STRIKEIQ_WS_INSTANCE
+    return (window as any).__strikeiq_ws
   }
 
   if (isConnecting) {
@@ -39,17 +39,30 @@ export function connectMarketWS() {
     socket.onmessage = null
   }
 
+  // Close any existing WebSocket connection before creating a new one
+  if ((window as any).__strikeiq_ws) {
+    try {
+      (window as any).__strikeiq_ws.close()
+    } catch {}
+  }
+
   socket = new WebSocket(WS_URL)
 
-  ;(window as any).STRIKEIQ_WS_INSTANCE = socket
+  ;(window as any).__strikeiq_ws = socket
 
   socket.onopen = () => {
 
     console.log("✅ WebSocket connected")
 
-    const store = useWSStore.getState()
+    const wsStore = useWSStore.getState()
+    const marketStore = useMarketStore.getState()
 
-    store.setConnected(true)
+    wsStore.setConnected(true)
+    
+    marketStore.updateMarketData({
+        connected: true,
+        lastUpdate: new Date().toISOString()
+    })
 
     reconnectAttempts = 0
     isConnecting = false
@@ -92,17 +105,18 @@ export function connectMarketWS() {
   const store = useWSStore.getState()
 
   if (data.type === "market_status") {
-
-    console.log("📊 WS MARKET STATUS:", data.market_open)
-
-    store.setMarketOpen(data.market_open)
-    store.setConnected(true)
-
+    const marketStore = useMarketStore.getState()
+    
+    marketStore.updateMarketData({
+        connected: true,
+        marketOpen: data.market_open,
+        lastUpdate: new Date().toISOString()
+    })
+    
     return
   }
 
   if (data.type === "market_data") {
-
     console.log("📡 WS MARKET DATA RECEIVED")
 
     // Handle spot price updates
@@ -144,11 +158,18 @@ export function connectMarketWS() {
 
   socket.onclose = () => {
 
-  console.log("❌ WebSocket closed")
+    console.log("❌ WebSocket closed")
 
-  const store = useWSStore.getState()
+    const wsStore = useWSStore.getState()
+    const marketStore = useMarketStore.getState()
 
-  store.setConnected(false)
+    wsStore.setConnected(false)
+    
+    marketStore.updateMarketData({
+        connected: false,
+        marketOpen: false,
+        lastUpdate: new Date().toISOString()
+    })
 
 }
 
