@@ -28,7 +28,7 @@ class WSConnectionManager:
             self.active_connections[key].add(websocket)
 
             logger.info(
-                f"🟢 WS CONNECTED → {key} → {len(self.active_connections[key])} clients"
+                f"🟢 WebSocket client connected → {key} → {len(self.active_connections[key])} clients"
             )
 
     # ================= DISCONNECT =================
@@ -42,16 +42,19 @@ class WSConnectionManager:
 
             self.active_connections[key].discard(websocket)
 
+            remaining = len(self.active_connections.get(key, []))
             if not self.active_connections[key]:
                 del self.active_connections[key]
 
             logger.info(
-                f" WS DISCONNECTED → {key} → remaining={len(self.active_connections.get(key, []))}"
+                f"🔴 WebSocket client disconnected → {key} → remaining={remaining}"
             )
 
     # ================= BROADCAST =================
 
     async def broadcast_json(self, key: str, message: dict):
+
+        logger.info(f"WS BROADCAST SENT - channel={key} message_type={message.get('type', 'unknown')}")
 
         async with self._lock:
 
@@ -61,42 +64,27 @@ class WSConnectionManager:
 
             connections = list(self.active_connections[key])
 
-        dead_connections = []
+        dead = []
         
-        # Parallel broadcast using asyncio.gather for 1000+ concurrent connections
-        send_tasks = []
-        for ws in connections:
-            send_tasks.append(self._send_to_client(ws, message))
-        
-        results = await asyncio.gather(*send_tasks, return_exceptions=True)
-        
-        sent_count = 0
-        for i, result in enumerate(results):
-            if isinstance(result, Exception):
-                dead_connections.append(connections[i])
-                logger.warning(f"❌ Failed to send to client: {result}")
-            else:
-                sent_count += 1
+        for conn in connections:
+            try:
+                await conn.send_json(message)
+            except Exception as e:
+                dead.append(conn)
+                logger.warning(f"❌ WS DEAD CLIENT REMOVED: {e}")
 
-        # cleanup dead sockets
-        if dead_connections:
-
+        # Remove dead connections
+        if dead:
             async with self._lock:
-
-                for ws in dead_connections:
-
+                for d in dead:
                     if key in self.active_connections:
-                        self.active_connections[key].discard(ws)
-
-                if key in self.active_connections and not self.active_connections[key]:
-                    del self.active_connections[key]
+                        self.active_connections[key].discard(d)
+                        if not self.active_connections[key]:
+                            del self.active_connections[key]
 
         logger.info(
-            f" BROADCAST → {key} → sent={sent_count} dead={len(dead_connections)} total={len(connections)}"
+            f"WS BROADCAST COMPLETE - channel={key} sent={len(connections)-len(dead)} dead={len(dead)} total={len(connections)}"
         )
-        
-        # Log the actual message being broadcasted
-        logger.debug(f" Message broadcasted: {message}")
 
     async def _send_to_client(self, ws: WebSocket, message: dict):
         """Helper method to send message to a single client"""
@@ -104,7 +92,26 @@ class WSConnectionManager:
             await ws.send_json(message)
             return True
         except Exception as e:
+            # Handle WebSocket disconnect gracefully
+            logger.debug(f"Failed to send to client (connection closed): {e}")
             return e
+    
+    async def send_heartbeat(self, key: str):
+        """Send heartbeat ping to all clients in a channel"""
+        # Disabled - do not send heartbeat messages to frontend
+        # Frontend should only receive real market data
+        logger.debug(f"Heartbeat disabled for channel {key}")
+        pass
+    
+    async def start_heartbeat(self, key: str, interval: int = 10):
+        """Start periodic heartbeat for a channel"""
+        while True:
+            try:
+                await self.send_heartbeat(key)
+                await asyncio.sleep(interval)
+            except Exception as e:
+                logger.error(f"Heartbeat error for channel {key}: {e}")
+                await asyncio.sleep(interval)
 
 
 # singleton instance

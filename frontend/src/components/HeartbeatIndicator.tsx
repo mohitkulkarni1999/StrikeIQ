@@ -1,11 +1,11 @@
 import React from 'react';
-import { useWebSocketHeartbeat } from '../utils/websocketHeartbeat';
+import { useWebSocketHeartbeat } from '@/utils/websocketHeartbeat';
 
 /**
  * React component for heartbeat indicator
  */
 export function HeartbeatIndicator() {
-  const { isConnected, isBeating, connectionDuration } = useWebSocketHeartbeat();
+  const { isConnected, lastHeartbeat } = useWebSocketHeartbeat();
 
   if (!isConnected) {
     return (
@@ -15,6 +15,9 @@ export function HeartbeatIndicator() {
       </div>
     );
   }
+
+  const isBeating = lastHeartbeat && (Date.now() - lastHeartbeat) < 5000; // Beating if heartbeat within 5 seconds
+  const lastSeen = lastHeartbeat ? Math.floor((Date.now() - lastHeartbeat) / 1000) : 0;
 
   return (
     <div className="flex items-center gap-2">
@@ -26,7 +29,7 @@ export function HeartbeatIndicator() {
         }`}
       />
       <span className="text-xs text-green-500">
-        LIVE {connectionDuration > 0 ? `(${Math.floor(connectionDuration / 1000)}s)` : ''}
+        LIVE {lastSeen > 0 ? `(${lastSeen}s ago)` : ''}
       </span>
     </div>
   );

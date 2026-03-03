@@ -195,7 +195,6 @@ class AIOutcomeEngine:
                 INSERT INTO outcome_log 
                 (prediction_id, formula_id, outcome, confidence, evaluation_method, evaluation_time)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                RETURNING id
             """
             
             params = (
@@ -207,11 +206,10 @@ class AIOutcomeEngine:
                 datetime.now()
             )
             
-            result = self.db.fetch_one(query, params)
+            result = self.db.execute_query(query, params)
             
             if result:
-                outcome_id = result[0]
-                logger.info(f"Outcome stored: ID {outcome_id}, Prediction {prediction['id']} -> {outcome}")
+                logger.info(f"Outcome stored: Prediction {prediction['id']} -> {outcome}")
                 return True
             else:
                 logger.error(f"Failed to store outcome for prediction {prediction['id']}")

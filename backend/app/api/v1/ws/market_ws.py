@@ -1,5 +1,6 @@
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.ws_manager import manager
+from app.core.redis_client import redis_client
 import logging
 import asyncio
 
@@ -10,15 +11,6 @@ router = APIRouter()
 
 @router.websocket("/ws/market")
 async def market_websocket(websocket: WebSocket):
-    """
-    Live Market WebSocket
-
-    Frontend connects here:
-    ws://localhost:8000/ws/market
-
-    Backend broadcasts using:
-    manager.broadcast_json("market_data", payload)
-    """
 
     await websocket.accept()
 
@@ -27,24 +19,42 @@ async def market_websocket(websocket: WebSocket):
     logger.info(
         f"🟢 MARKET WS CONNECTED | clients={len(manager.active_connections.get('market_data', set()))}"
     )
-    
-    # Log all active channels for debugging
-    logger.info(f"📊 Active channels: {list(manager.active_connections.keys())}")
+
+    try:
+
+        from app.services.market_session_manager import get_market_session_manager
+
+        market_manager = get_market_session_manager()
+
+        market_open = await market_manager.is_market_open()
+
+        await websocket.send_json({
+            "type": "market_status",
+            "market_open": market_open
+        })
+
+        logger.info(f"📊 Initial market status sent: market_open={market_open}")
+
+        # Send last tick if available
+        last_tick = await redis_client.get("market:last_tick")
+
+        if last_tick:
+
+            await websocket.send_json({
+                "type": "market_tick",
+                "data": last_tick
+            })
+
+    except Exception as e:
+
+        logger.error(f"Failed initial WS state: {e}")
 
     try:
 
         while True:
-
-            # keep connection alive without blocking
-            await asyncio.sleep(30)
-
-            try:
-                await websocket.send_json({"type": "ping"})
-                logger.debug("💓 Sent ping to client")
-            except Exception:
-                # connection probably closed
-                logger.warning("⚠️ Failed to send ping - connection closed")
-                break
+            # Passive connection keep-alive - no receive_text() needed
+            # Frontend does not send messages, just keep connection open
+            await asyncio.sleep(60)
 
     except WebSocketDisconnect:
 

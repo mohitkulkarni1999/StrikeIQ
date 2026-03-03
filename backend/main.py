@@ -7,6 +7,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from contextlib import asynccontextmanager
+from app.core.config import settings
 
 # ================= LOGGING =================
 
@@ -104,6 +105,39 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Instrument load failed: {e}")
 
+    # -------- START UPSTOX MARKET FEED --------
+    try:
+        from app.services.token_manager import token_manager
+        
+        # Check if we have a token first
+        token = await token_manager.get_token()
+        
+        if token:
+            # Verify token with Upstox API
+            valid = await token_manager.verify_token(token)
+            
+            if not valid:
+                logger.warning("❌ UPSTOX TOKEN INVALID")
+                await token_manager.delete_token()
+                token = None
+            else:
+                logger.info("✅ Valid Upstox token available")
+                
+                # Start market feed with valid token
+                feed = await ws_feed_manager.start_feed()
+                if feed and feed.is_connected:
+                    logger.info("🟢 Upstox Market Feed Started")
+                else:
+                    logger.info("📡 Market feed supervisor started")
+        else:
+            logger.info("⚠️ No Upstox token found")
+            
+    except Exception as token_error:
+        logger.warning(f"⚠️ Upstox token validation error: {token_error}")
+        logger.info("Market feed running in REST-only mode")
+    except Exception as e:
+        logger.error(f"Upstox feed startup failed: {e}")
+
     # -------- MARKET SESSION --------
     try:
         from app.services.market_session_manager import get_market_session_manager
@@ -195,9 +229,9 @@ app.add_middleware(
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key="strikeiq_dev_secret",
+    secret_key=settings.SECRET_KEY,
     session_cookie="session",
-    same_site="lax"
+    same_site="strict"  # Enhanced security for financial app
 )
 
 
@@ -257,21 +291,17 @@ async def init_websocket(request: Request):
         feed = await ws_feed_manager.get_feed()
 
         if feed and feed.is_connected:
-
             logger.info("WS already connected")
-
             return {"status": "already_connected"}
 
         try:
-
             feed = await ws_feed_manager.start_feed()
 
-            if not feed or not feed.is_connected:
-
-                return JSONResponse(
-                    status_code=500,
-                    content={"msg": "WS connect failed"}
-                )
+            if not feed:
+                raise HTTPException(status_code=500, detail="WS connect failed - no feed returned")
+                
+            if not feed.is_connected:
+                raise HTTPException(status_code=500, detail="WS connect failed - not connected")
 
             request.session["WS_CONNECTED"] = True
 
@@ -279,10 +309,10 @@ async def init_websocket(request: Request):
 
             return {"status": "connected"}
 
+        except HTTPException:
+            raise
         except Exception as e:
-
             logger.error(f"WS init failed: {str(e)}")
-
             raise HTTPException(status_code=500, detail="WebSocket init failed")
 
 
@@ -325,7 +355,7 @@ async def get_ai_status():
         from app.services.market_session_manager import get_market_session_manager
         
         market_manager = get_market_session_manager()
-        is_market_open = market_manager.is_market_open()
+        is_market_open = await market_manager.is_market_open()
         
         # Get AI scheduler status
         job_status = ai_scheduler.get_job_status()

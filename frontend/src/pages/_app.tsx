@@ -1,74 +1,60 @@
 import type { AppProps } from 'next/app'
 import { useEffect } from 'react'
+import dynamic from 'next/dynamic'
+import { useRouter } from 'next/router'
+
 import { AuthProvider } from '@/contexts/AuthContext'
-import Navbar from '@/components/layout/Navbar'
+
 import AppBootstrapGuard from '@/components/AppBootstrapGuard'
-import { useWSStore } from '@/core/ws/wsStore'
+// import RouteGuard from '@/components/RouteGuard'  // DISABLED
+import ServiceInitializer from '@/components/ServiceInitializer'
+
 import '@/styles/globals.css'
+
+const Navbar = dynamic(() => import('@/components/layout/Navbar'), {
+  ssr: false
+})
 
 function MyApp({ Component, pageProps }: AppProps) {
 
+  const router = useRouter()
+
+  const isAuthPage = router.pathname.startsWith('/auth')
+
   useEffect(() => {
-
-    // Apply dark mode
     document.documentElement.classList.add('dark')
+    
+    // DEBUG: Log any router changes
+    console.log('🌐 _app.tsx - Current pathname:', router.pathname)
+  }, [router.pathname])
 
-    // ===============================
-    // GLOBAL WEBSOCKET INITIALIZATION
-    // ===============================
-
-    if (typeof window !== "undefined") {
-
-      const store = useWSStore.getState()
-
-      // Prevent duplicate sockets (React StrictMode safe)
-      if (!(window as any).__STRIKEIQ_WS_STARTED) {
-
-        if (!store.connected && !store.ws) {
-
-          console.log("🚀 Initializing global WebSocket connection")
-
-          store.connect("NIFTY", "")
-
-        }
-
-        ;(window as any).__STRIKEIQ_WS_STARTED = true
-      }
-    }
-
-    // ===============================
-    // AUTH EXPIRY LISTENER
-    // ===============================
-
-    const handleAuthExpired = () => {
-
-      console.warn("🔐 Auth expired event received - redirecting to /auth")
-
-      localStorage.removeItem("upstox_auth")
-      sessionStorage.removeItem("upstox_auth")
-
-      window.location.href = "/auth"
-    }
-
-    window.addEventListener("auth-expired", handleAuthExpired)
-
-    console.log("🔍 AUTH EXPIRY LISTENER INSTALLED")
-
-    return () => {
-      window.removeEventListener("auth-expired", handleAuthExpired)
-    }
-
+  useEffect(() => {
+    // DEBUG: Log when component mounts
+    console.log('🌐 _app.tsx - Component mounted, pathname:', router.pathname)
   }, [])
 
   return (
+
     <AuthProvider>
+
       <AppBootstrapGuard>
-        <div className="min-h-screen bg-background text-text-primary">
-          <Navbar />
-          <Component {...pageProps} />
-        </div>
+
+        {/* <RouteGuard> */}  {/* DISABLED */}
+
+          <ServiceInitializer>
+
+            {!isAuthPage && <Navbar />}
+
+            <Component {...pageProps} />
+
+          </ServiceInitializer>
+
+        {/* </RouteGuard> */}  {/* DISABLED */}
+
       </AppBootstrapGuard>
+
     </AuthProvider>
+
   )
 }
 

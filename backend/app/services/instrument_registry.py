@@ -212,6 +212,32 @@ class InstrumentRegistry:
             expiry = expiry.isoformat()
         return self.futidx.get(symbol, {}).get(expiry)
 
+    def get_expiries(self, symbol: str):
+        if symbol not in self.options:
+            return []
+
+        expiries = set()
+
+        for expiry in self.options[symbol]:
+            expiries.add(expiry)
+
+        return sorted(list(expiries))
+
+    def get_option_instruments(self, symbol: str):
+        """Get all option instrument keys for a symbol across all expiries"""
+        if symbol not in self.options:
+            return []
+
+        instruments = []
+        for expiry in self.options[symbol]:
+            for strike in self.options[symbol][expiry]:
+                for option_type in ["CE", "PE"]:
+                    instrument_key = self.options[symbol][expiry][strike].get(option_type)
+                    if instrument_key:
+                        instruments.append(instrument_key)
+        
+        return instruments
+
 
 # --------------------------------------------------
 # SINGLETON

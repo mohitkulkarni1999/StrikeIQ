@@ -1,4 +1,5 @@
 import api from '@/lib/api';
+import { validateTokenAndRedirect } from '@/utils/auth';
 
 export interface ExpiryResponse {
   symbol: string;
@@ -6,11 +7,15 @@ export interface ExpiryResponse {
 }
 
 export const fetchAvailableExpiries = async (symbol: string): Promise<string[]> => {
-  try {
-    const response = await api.get<ExpiryResponse>(`/api/v1/market/expiries?symbol=${symbol}`);
-    return response.data.expiries || [];
-  } catch (error) {
-    console.error('Failed to fetch expiries:', error);
+  // Validate token before making request
+  if (!validateTokenAndRedirect()) {
     return [];
+  }
+  
+  try {
+    const res = await api.get(`/api/v1/market/expiries?symbol=${symbol}`)
+    return res.data.expiries ?? []
+  } catch {
+    return []
   }
 };

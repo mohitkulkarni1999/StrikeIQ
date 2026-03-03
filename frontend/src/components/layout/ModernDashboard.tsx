@@ -32,14 +32,14 @@ interface ModernDashboardProps {
 }
 
 // Memoized status indicator component
-const StatusIndicator = memo(({ 
-  isConnected, 
-  label, 
-  type 
-}: { 
-  isConnected: boolean; 
-  label: string; 
-  type: 'market' | 'websocket'; 
+const StatusIndicator = memo(({
+  isConnected,
+  label,
+  type
+}: {
+  isConnected: boolean;
+  label: string;
+  type: 'market' | 'websocket';
 }) => {
   const statusConfig = useMemo(() => ({
     market: {
@@ -91,7 +91,7 @@ const DashboardHeader = memo(({
         <h1 className="text-2xl lg:text-4xl font-black bg-gradient-to-r from-[#00FF9F] to-[#4F8CFF] bg-clip-text text-transparent">
           StrikeIQ
         </h1>
-        
+
         <input
           type="text"
           value={symbol}
@@ -242,7 +242,7 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
   // Memoized error component
   const ErrorComponent = useMemo(() => {
     if (!error) return null;
-    
+
     return (
       <PerformanceOptimizedCard
         className="bg-red-950/20 border-red-900/50 p-8 m-4"
@@ -263,7 +263,7 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
   // Memoized loading component
   const LoadingComponent = useMemo(() => {
     if (!loading) return null;
-    
+
     return (
       <div className="flex flex-col items-center justify-center min-h-[60vh]">
         <RefreshCw className="w-10 h-10 text-[#4F8CFF] animate-spin mb-4" />
@@ -301,7 +301,7 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
             <PerformanceOptimizedCard dataKey="bias-meter">
               <BiasMeter intelligence={data?.intelligence ?? null} />
             </PerformanceOptimizedCard>
-            
+
             <PerformanceOptimizedCard dataKey="expected-move">
               <ExpectedMoveChart
                 probability={
@@ -311,7 +311,7 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
                 }
               />
             </PerformanceOptimizedCard>
-            
+
             <PerformanceOptimizedCard dataKey="pin-probability">
               <div className="p-6 text-center">
                 <div className="text-xs text-gray-400 uppercase tracking-widest font-bold mb-4">
@@ -344,7 +344,7 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
                 marketChangePercent={data?.change_percent}
               />
             </PerformanceOptimizedCard>
-            
+
             <PerformanceOptimizedCard dataKey="smart-money">
               <SignalCards intelligence={data?.intelligence ?? null} />
             </PerformanceOptimizedCard>
@@ -362,9 +362,8 @@ const ModernDashboard: React.FC<ModernDashboardProps> = memo(({
             <AIInterpretationPanel intelligence={data?.intelligence ?? null} />
           </PerformanceOptimizedCard>
 
-          {/* OI Heatmap */}
           <PerformanceOptimizedCard dataKey="oi-heatmap">
-            <OIHeatmap symbol={symbol} liveData={data?.optionChain ?? null} />
+            <OIHeatmap symbol={symbol} />
           </PerformanceOptimizedCard>
         </div>
       </Container>

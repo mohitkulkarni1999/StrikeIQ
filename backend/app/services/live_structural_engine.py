@@ -88,6 +88,105 @@ class LiveStructuralEngine:
         self.regime_confidence_engine = RegimeConfidenceEngine()
         self.expiry_magnet_engine = ExpiryMagnetModel()
         
+    async def update_market_state(self, market_data: Dict[str, Any]):
+        """
+        Update AI engine with new market data from WebSocket feed
+        This is called by the WebSocket feed when new data arrives
+        """
+        try:
+            spot = market_data.get("spot")
+            chain = market_data.get("chain", {})
+            
+            if spot:
+                logger.info(f"AI ANALYTICS UPDATED: spot={spot}, chain_size={len(chain)}")
+                
+                # Trigger immediate analytics computation for all symbols
+                await self.compute_all_metrics()
+                
+                # Broadcast AI signals if any are generated
+                await self._broadcast_ai_signals()
+            
+        except Exception as e:
+            logger.error(f"Error updating AI market state: {e}")
+
+    async def _broadcast_ai_signals(self):
+        """Broadcast AI signals to WebSocket clients"""
+        try:
+            # Get latest metrics for all symbols
+            async with self._lock:
+                symbols = list(self.metrics_cache.keys())
+            
+            for symbol in symbols:
+                metrics = self.metrics_cache.get(symbol)
+                if not metrics:
+                    continue
+                
+                # Generate AI signals based on metrics
+                signals = await self._generate_ai_signals(symbol, metrics)
+                
+                if signals:
+                    await manager.broadcast_json(
+                        "market_data",
+                        {
+                            "type": "ai_signal",
+                            "symbol": symbol,
+                            "signals": signals
+                        }
+                    )
+                    logger.info(f"AI SIGNAL BROADCAST: {symbol} -> {signals}")
+        
+        except Exception as e:
+            logger.error(f"Error broadcasting AI signals: {e}")
+
+    async def _generate_ai_signals(self, symbol: str, metrics: LiveMetrics) -> List[Dict[str, Any]]:
+        """Generate AI trading signals based on metrics"""
+        signals = []
+        
+        try:
+            # Gamma-based signals
+            if metrics.structural_regime == "positive_gamma":
+                signals.append({
+                    "type": "bullish_gamma",
+                    "confidence": metrics.regime_confidence or 70,
+                    "message": "Positive gamma regime suggests mean reversion"
+                })
+            elif metrics.structural_regime == "negative_gamma":
+                signals.append({
+                    "type": "bearish_gamma", 
+                    "confidence": metrics.regime_confidence or 70,
+                    "message": "Negative gamma regime suggests trend acceleration"
+                })
+            
+            # Flow imbalance signals
+            if metrics.flow_imbalance and abs(metrics.flow_imbalance) > 0.3:
+                direction = "bullish" if metrics.flow_imbalance > 0 else "bearish"
+                signals.append({
+                    "type": f"{direction}_flow",
+                    "confidence": min(abs(metrics.flow_imbalance) * 100, 90),
+                    "message": f"Strong {direction} flow detected"
+                })
+            
+            # Intent score signals
+            if metrics.intent_score > 80:
+                signals.append({
+                    "type": "high_institutional_intent",
+                    "confidence": metrics.intent_score,
+                    "message": "High institutional activity detected"
+                })
+            
+            # Volatility regime signals
+            if metrics.volatility_regime == "extreme":
+                signals.append({
+                    "type": "volatility_spike",
+                    "confidence": 80,
+                    "message": "Extreme volatility regime - expect large moves"
+                })
+            
+        except Exception as e:
+            logger.error(f"Error generating AI signals: {e}")
+        
+        return signals
+    
     async def start_analytics_loop(self, interval_seconds: int = 2) -> None:
         """
         Start the continuous analytics computation loop

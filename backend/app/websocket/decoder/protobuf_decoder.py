@@ -47,6 +47,8 @@ class ProtobufDecoder:
         start_time = datetime.now()
         
         try:
+            logger.info("PROTOBUF DECODE START")
+            
             # Run CPU-intensive protobuf parsing in thread pool
             # This prevents blocking the asyncio event loop
             tick_dto = await asyncio.to_thread(
@@ -61,6 +63,7 @@ class ProtobufDecoder:
             self.decode_count += 1
             self.total_decode_time_ms += processing_time
             
+            logger.info(f"PROTOBUF DECODE RESULT={tick_dto}")
             logger.debug(f"Decoded protobuf message {message_id} in {processing_time:.2f}ms")
             
             return DecodingResult(
@@ -73,7 +76,7 @@ class ProtobufDecoder:
             processing_time = (datetime.now() - start_time).total_seconds() * 1000
             self.error_count += 1
             
-            error_msg = f"Protobuf decode failed for message {message_id}: {str(e)}"
+            error_msg = f"PROTOBUF DECODE ERROR {str(e)}"
             logger.error(error_msg)
             
             return DecodingResult(

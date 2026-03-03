@@ -1,10 +1,15 @@
+import asyncio
+import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.core.ws_manager import manager
 from app.services.live_chain_manager import chain_manager
 from app.services.instrument_registry import get_instrument_registry
 from app.services.websocket_market_feed import ws_feed_manager
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter()
+
 
 @router.websocket("/ws/live-options/{symbol}")
 async def live_options_ws(websocket: WebSocket, symbol: str):
@@ -20,30 +25,42 @@ async def live_options_ws(websocket: WebSocket, symbol: str):
     await websocket.accept()
     await manager.connect(key, websocket)
 
-    print(f"🟢 WS CONNECTED → {key}")
+    logger.info(f"🟢 WS CONNECTED → {key}")
 
     builder = None
 
     try:
 
-        # ✅ GET REGISTRY SINGLETON
+        # GET REGISTRY SINGLETON
         registry = get_instrument_registry()
         await registry.wait_until_ready()
 
-        # ✅ GET BUILDER (PER EXPIRY)
+        # GET BUILDER (PER EXPIRY)
         builder = await chain_manager.get_builder(symbol, expiry)
 
-        # ✅ START BUILDER ONLY ONCE
+        # START BUILDER ONLY ONCE
         await builder.start()
 
-        # 🔁 KEEP ALIVE
+        # CRITICAL FIX: Passive keepalive loop.
+        # Do NOT use receive_text() — frontend does not send messages.
+        # Server broadcasts chain_update via manager.broadcast_json().
         while True:
-            await websocket.receive_text()
+            await asyncio.sleep(60)
 
     except WebSocketDisconnect:
 
-        print(f"🔴 WS DISCONNECTED → {key}")
+        logger.info(f"🔴 WS DISCONNECTED → {key}")
         await manager.disconnect(key, websocket)
 
         if builder:
             await builder.stop_tasks()
+
+    except Exception as e:
+        logger.error(f"❌ WS ERROR → {key}: {e}")
+        await manager.disconnect(key, websocket)
+
+        if builder:
+            try:
+                await builder.stop_tasks()
+            except Exception:
+                pass

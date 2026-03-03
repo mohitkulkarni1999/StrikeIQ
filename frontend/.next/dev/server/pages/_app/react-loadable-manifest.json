@@ -1,1 +1,9 @@
-{}
+{
+  "[project]/src/components/layout/Navbar.tsx [client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/src/components/layout/Navbar.tsx [client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/_67069c07._.js",
+      "static/chunks/src_components_layout_Navbar_tsx_43f761f9._.js"
+    ]
+  }
+}

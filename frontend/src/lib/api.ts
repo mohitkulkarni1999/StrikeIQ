@@ -1,4 +1,5 @@
 import axios from "axios"
+import { isTokenExpired } from "@/utils/auth"
 
 const api = axios.create({
   baseURL: "", // Use empty string to support relative URLs for Next.js rewrites
@@ -12,7 +13,8 @@ const api = axios.create({
 // Request interceptor
 api.interceptors.request.use(
   (config) => {
-    // Add any request modifications here if needed
+    // DISABLED: Auth checks are disabled per system memory
+    // Allow requests to proceed without token validation
     return config
   },
   (error) => {
@@ -27,18 +29,9 @@ api.interceptors.response.use(
     return response
   },
   (error) => {
-    // Handle 401 Unauthorized errors
-    if (error.response?.status === 401) {
-      console.warn('🔐 Authentication required - dispatching auth-expired event')
-
-      // Clear any stored auth data
-      localStorage.removeItem("upstox_auth")
-      sessionStorage.removeItem("upstox_auth")
-
-      // Dispatch global event for auth expiry
-      window.dispatchEvent(new Event("auth-expired"))
-    }
-
+    // DISABLED: Auth checks are disabled per system memory
+    // Do not redirect on 401 errors
+    
     // Handle network errors
     if (!error.response) {
       console.error('🌐 Network error - please check your connection')

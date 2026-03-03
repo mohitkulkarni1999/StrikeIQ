@@ -26,7 +26,7 @@ def check_market_time():
 
 class MarketSessionManager:
 
-    def is_market_open(self):
+    async def is_market_open(self):
         return check_market_time()
 
 # Singleton instance for global access

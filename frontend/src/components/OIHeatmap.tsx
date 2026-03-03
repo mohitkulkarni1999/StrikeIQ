@@ -34,7 +34,7 @@ const OIHeatmap: React.FC<OIHeatmapProps> = ({ symbol }) => {
     expiryError,
     handleExpiryChange,
     optionChainConnected
-  } = useExpirySelector(symbol);
+  } = useExpirySelector();
 
   // Use global store data
   const { calls, puts, connected } = useDashboardData();

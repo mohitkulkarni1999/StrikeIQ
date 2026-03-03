@@ -16,40 +16,41 @@ logger = logging.getLogger(__name__)
 async def get_auth_status() -> Dict[str, Any]:
     """
     Production-grade authentication status check
-    Validates actual token by calling get_valid_token()
+    Validates token with Upstox API before returning status
     """
     try:
-        # Attempt to get a valid token - this validates authentication
-        await token_manager.get_valid_token()
+        # Get token from Redis or memory
+        token = await token_manager.get_token()
         
-        # If we get here, token is valid
-        return {
-            "authenticated": True,
-            "login_url": None
-        }
-            
-    except HTTPException as e:
-        if e.status_code == 401:
-            # Authentication failed - return login URL
-            auth_service = get_upstox_auth_service()
-            login_url = auth_service.get_authorization_url()
+        if not token:
+            return {
+                "authenticated": False,
+                "broker_connected": False
+            }
+        
+        # Verify token with Upstox API
+        valid = await token_manager.verify_token(token)
+        
+        if not valid:
+            # Token invalid - remove from Redis
+            await token_manager.delete_token()
             
             return {
                 "authenticated": False,
-                "login_url": login_url
+                "broker_connected": False
             }
-        else:
-            # Re-raise non-auth HTTP exceptions
-            raise
+        
+        # Token valid
+        return {
+            "authenticated": True,
+            "broker_connected": True
+        }
             
     except Exception as e:
         logger.error(f"Auth status check failed: {str(e)}")
         
         # Treat any unexpected error as authentication failure
-        auth_service = get_upstox_auth_service()
-        login_url = auth_service.get_authorization_url()
-        
         return {
             "authenticated": False,
-            "login_url": login_url
+            "broker_connected": False
         }

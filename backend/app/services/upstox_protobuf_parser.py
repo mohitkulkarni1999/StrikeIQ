@@ -1,85 +1,135 @@
 import logging
 import time
-from typing import List, Dict
+from typing import List, Dict, Optional
 from app.proto import MarketDataFeed_pb2
-
 
 logger = logging.getLogger(__name__)
 
 
-def parse_upstox_feed(message: bytes) -> List[Dict]:
+def extract_index_price(decoded: Dict) -> Optional[float]:
+    """Extract index price from decoded protobuf message"""
+    try:
+        feeds = decoded.get("feeds", {})
+        for key, value in feeds.items():
+            if "indexFF" in value:
+                index_data = value["indexFF"]
+                if "ltpc" in index_data:
+                    return index_data["ltpc"]["ltp"]
+    except Exception as e:
+        print("INDEX PARSE ERROR:", e)
+    return None
+
+
+def parse_upstox_feed(data_bytes: bytes) -> List[Dict]:
+
+    logger.info("PROTOBUF DECODE START")
+
+    response = MarketDataFeed_pb2.FeedResponse()
+
+    try:
+        response.ParseFromString(data_bytes)
+    except Exception as e:
+        logger.error("PROTOBUF PARSE ERROR: %s", str(e))
+        return []
 
     ticks: List[Dict] = []
 
-    # Log raw message details
-    logger.info(f"📦 Received raw protobuf message: {len(message)} bytes")
+    # Debug message type
+    logger.info(
+        "PROTOBUF MESSAGE TYPE=%s | FEEDS=%s",
+        getattr(response, "type", "unknown"),
+        len(response.feeds)
+    )
 
-    try:
+    # Heartbeat / empty packets
+    if len(response.feeds) == 0:
+        logger.warning("PROTOBUF EMPTY MESSAGE (heartbeat or market closed)")
+        return []
 
-        feed_response = MarketDataFeed_pb2.FeedResponse()
-        feed_response.ParseFromString(message)
+    logger.info("PROTOBUF FEEDS FOUND: %s", len(response.feeds))
 
-        logger.info(f"🔍 Parsed FeedResponse - feeds count: {len(feed_response.feeds)}")
+    for instrument_key, feed in response.feeds.items():
 
-        if not feed_response.feeds:
-            logger.warning("⚠️ No feeds in FeedResponse -可能心跳包")
-            # Log the raw structure for debugging
-            logger.debug(f"FeedResponse structure: {feed_response}")
-            return ticks
+        try:
 
-        for instrument_key, feed in feed_response.feeds.items():
+            if not feed.HasField("ff"):
+                continue
 
-            logger.debug(f"📊 Processing feed for instrument: {instrument_key}")
+            ff = feed.ff
 
-            try:
+            ltp = None
 
-                # Skip if ff missing
-                if not hasattr(feed, "ff"):
-                    logger.warning(f"❌ Missing 'ff' attribute for {instrument_key}")
-                    continue
-
-                ff = feed.ff
-
-                # Only index feed supported here
-                if not hasattr(ff, "indexFF"):
-                    logger.debug(f"⚠️ No 'indexFF' for {instrument_key} -可能非指数数据")
-                    continue
+            # INDEX
+            if ff.HasField("indexFF"):
 
                 index_ff = ff.indexFF
 
-                if not hasattr(index_ff, "ltpc"):
-                    logger.warning(f"❌ Missing 'ltpc' in indexFF for {instrument_key}")
-                    continue
+                if index_ff.HasField("ltpc"):
 
-                ltp = index_ff.ltpc.ltp
+                    ltpc = index_ff.ltpc
+                    ltp = ltpc.ltp
 
-                if ltp <= 0:
-                    logger.warning(f"⚠️ Invalid LTP {ltp} for {instrument_key}")
-                    continue
+                    logger.info(
+                        "INDEX TICK | %s | LTP=%s",
+                        instrument_key,
+                        ltp
+                    )
 
-                tick = {
-                    "symbol": instrument_key,
-                    "ltp": float(ltp),
-                    "timestamp": int(time.time() * 1000)
-                }
+            # EQUITY / DERIVATIVES
+            elif ff.HasField("marketFF"):
 
-                ticks.append(tick)
+                market_ff = ff.marketFF
 
-                logger.info(f"✅ Parsed tick: {instrument_key} → {ltp}")
+                if market_ff.HasField("ltpc"):
 
-            except Exception as inner_error:
+                    ltpc = market_ff.ltpc
+                    ltp = ltpc.ltp
 
-                logger.warning(
-                    f"❌ Tick parse skipped for {instrument_key} → {inner_error}"
-                )
-                # Log the feed structure for debugging
-                logger.debug(f"Feed structure for {instrument_key}: {feed}")
+                    logger.info(
+                        "MARKET TICK | %s | LTP=%s",
+                        instrument_key,
+                        ltp
+                    )
+
+            if ltp is None:
+                continue
+
+            ticks.append({
+                "instrument_key": instrument_key,
+                "symbol": instrument_key.split("|")[-1],
+                "ltp": ltp,
+                "timestamp": int(time.time() * 1000)
+            })
+
+        except Exception as e:
+
+            logger.error(
+                "PROTOBUF PARSE ERROR | %s | %s",
+                instrument_key,
+                str(e)
+            )
+
+    logger.info("PROTOBUF DECODE SUCCESS: %s ticks", len(ticks))
+
+    return ticks
+
+
+def extract_index_price(feed) -> float | None:
+    """
+    Extract index LTP from Upstox protobuf feed.
+    """
+
+    try:
+
+        # Upstox index feed format
+        if hasattr(feed, "ltpc") and feed.ltpc:
+
+            if hasattr(feed.ltpc, "ltp"):
+
+                return float(feed.ltpc.ltp)
 
     except Exception as e:
 
-        logger.error(f"❌ Feed parse error: {e}")
-        # Log raw message bytes for debugging (first 100 bytes)
-        logger.debug(f"Raw message (first 100 bytes): {message[:100]}")
+        print("INDEX PARSE ERROR:", e)
 
-    logger.info(f"📈 Total ticks parsed: {len(ticks)}")
-    return ticks
+    return None

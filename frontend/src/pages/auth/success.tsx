@@ -1,59 +1,40 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/router'
 import Head from 'next/head'
-import { useAuth } from '../../contexts/AuthContext'
-import { initWebSocketOnce } from '@/core/ws/wsInitController'
-import OAuthHandler from '../../components/OAuthHandler'
-import api from '../../api/axios'
+import { useAuthStore, useAuthStatus, useBackendStatus } from '@/stores/authStore'
 
 export default function AuthSuccess() {
   const router = useRouter()
-  const { checkAuth } = useAuth()
-  const [status, setStatus] = useState('loading')
+  const { checkAuth } = useAuthStore()
+  const status = useAuthStatus()
+  const backendStatus = useBackendStatus()
+  const [authChecked, setAuthChecked] = useState(false)
 
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search)
-    const authStatus = urlParams.get('status')
-    const upstoxStatus = urlParams.get('upstox')
+    console.log("🚀 AUTH SUCCESS PAGE - Using authStore")
     
-    // Check for either status=success or upstox=connected
-    const isSuccess = authStatus === 'success' || upstoxStatus === 'connected'
-    
-    setStatus(isSuccess ? 'success' : 'unknown')
-    
-    // If auth successful, trigger WebSocket init and redirect
-    if (isSuccess) {
-      console.log('OAuth success detected, initializing WebSocket')
-      
-      // Initialize WebSocket connection using locked core module
-      const initWebSocket = async () => {
-        try {
-          console.log('Calling locked WS init controller...')
-          const initResult = await initWebSocketOnce()
-          
-          if (initResult.status === 'success') {
-            console.log('WS init successful:', initResult)
-            
-            // Trigger auth context refresh
-            await checkAuth()
-            
-            // Redirect to dashboard after short delay
-            setTimeout(() => {
-              router.push('/')
-            }, 500)
-          } else {
-            console.error('WS init failed:', initResult.message)
-            setStatus('error')
-          }
-        } catch (error) {
-          console.error('WS init failed:', error)
-          setStatus('error')
-        }
-      }
-      
-      initWebSocket()
+    // Trigger manual auth check only once since automatic checks are disabled
+    if (!authChecked) {
+      checkAuth()
+      setAuthChecked(true)
     }
-  }, [router, checkAuth])
+  }, [checkAuth, authChecked])
+
+  useEffect(() => {
+    if (status === 'loading') {
+      return
+    }
+    
+    if (status === 'authenticated') {
+      console.log("🎉 AUTH SUCCESS PAGE - User is authenticated")
+      
+      // Redirect to / immediately when authenticated
+      console.log("🔄 AUTH SUCCESS PAGE - Redirecting to dashboard")
+      router.replace("/")
+    } else {
+      console.log("❌ AUTH SUCCESS PAGE - User not authenticated")
+    }
+  }, [status, router])
 
   return (
     <>
@@ -64,15 +45,19 @@ export default function AuthSuccess() {
       
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <OAuthHandler onAuthSuccess={() => {
-            setStatus('success');
-            setTimeout(() => {
-              checkAuth().then(() => {
-                router.push('/')
-              })
-            }, 1000);
-          }} />
-          {status === 'success' ? (
+          {status === 'loading' && (
+            <>
+              <div className="mb-8">
+                <div className="w-20 h-20 bg-blue-500 rounded-full flex items-center justify-center mx-auto mb-4">
+                  <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-white"></div>
+                </div>
+                <h1 className="text-3xl font-bold text-white mb-2">Connecting your Upstox account...</h1>
+                <p className="text-gray-300">Please wait while we verify your authentication</p>
+              </div>
+            </>
+          )}
+          
+          {status === 'authenticated' && (
             <>
               <div className="mb-8">
                 <div className="w-20 h-20 bg-green-500 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -80,14 +65,16 @@ export default function AuthSuccess() {
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
                   </svg>
                 </div>
-                <h1 className="text-3xl font-bold text-white mb-2">Authentication Successful!</h1>
-                <p className="text-gray-300 mb-4">Your Upstox account has been connected successfully</p>
+                <h1 className="text-3xl font-bold text-white mb-2">Broker Connected Successfully</h1>
+                <p className="text-gray-300 mb-4">Your account has been connected successfully</p>
                 <p className="text-sm text-gray-400">Redirecting to dashboard...</p>
               </div>
               
               <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
             </>
-          ) : (
+          )}
+          
+          {status === 'unauthenticated' && (
             <>
               <div className="mb-8">
                 <div className="w-20 h-20 bg-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -96,14 +83,14 @@ export default function AuthSuccess() {
                   </svg>
                 </div>
                 <h1 className="text-3xl font-bold text-white mb-2">Authentication Failed</h1>
-                <p className="text-gray-300">There was an issue connecting your Upstox account</p>
+                <p className="text-gray-300 mb-4">Please try connecting again</p>
               </div>
               
               <button
-                onClick={() => router.push('/')}
+                onClick={() => router.replace('/api/v1/auth/upstox')}
                 className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-lg transition-colors"
               >
-                Try Again
+                Try Authentication Again
               </button>
             </>
           )}

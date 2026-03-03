@@ -101,6 +101,19 @@ class AISignalEngine:
             # PCR-based signals
             if 'PCR' in conditions:
                 pcr = market_data.get('pcr', 0)
+                # Convert to float if string with validation
+                if isinstance(pcr, str):
+                    try:
+                        pcr = float(pcr)
+                    except (ValueError, TypeError):
+                        logger.warning(f"Invalid PCR value: {pcr}, using 0.0")
+                        pcr = 0.0
+                elif not isinstance(pcr, (int, float)):
+                    logger.warning(f"Invalid PCR type: {type(pcr)}, using 0.0")
+                    pcr = 0.0
+                else:
+                    pcr = float(pcr or 0)  # Ensure numeric
+                        
                 if '>' in conditions and '1.2' in conditions and pcr > 1.2:
                     matches = True
                     signal = "BUY"
@@ -115,14 +128,36 @@ class AISignalEngine:
                 call_oi = market_data.get('total_call_oi', 0)
                 put_oi = market_data.get('total_put_oi', 0)
                 
+                # Enforce numeric conversion with validation
+                try:
+                    call_oi = float(call_oi or 0)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid call_oi value: {call_oi}, using 0.0")
+                    call_oi = 0.0
+                    
+                try:
+                    put_oi = float(put_oi or 0)
+                except (ValueError, TypeError):
+                    logger.warning(f"Invalid put_oi value: {put_oi}, using 0.0")
+                    put_oi = 0.0
+                
+                # Additional validation guards
+                if call_oi < 0:
+                    logger.warning(f"Negative call_oi detected: {call_oi}, using 0.0")
+                    call_oi = 0.0
+                    
+                if put_oi < 0:
+                    logger.warning(f"Negative put_oi detected: {put_oi}, using 0.0")
+                    put_oi = 0.0
+                
                 if call_oi > put_oi * 1.5:  # High call OI relative to put OI
                     matches = True
                     signal = "SELL"
-                    confidence = min(0.8, (call_oi - put_oi) / call_oi)
+                    confidence = min(0.8, (call_oi - put_oi) / call_oi if call_oi > 0 else 0.0)
                 elif put_oi > call_oi * 1.5:  # High put OI relative to call OI
                     matches = True
                     signal = "BUY"
-                    confidence = min(0.8, (put_oi - call_oi) / put_oi)
+                    confidence = min(0.8, (put_oi - call_oi) / put_oi if put_oi > 0 else 0.0)
             
             # Apply confidence threshold
             if matches and confidence >= confidence_threshold:

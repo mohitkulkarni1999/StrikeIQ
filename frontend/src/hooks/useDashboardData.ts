@@ -3,7 +3,7 @@ import { useWSStore } from "@/core/ws/wsStore"
 export function useDashboardData() {
 
   const spot = useWSStore((s) => s.spot)
-  const optionChain = useWSStore((s) => s.optionChain)
+  const optionChain = useWSStore((s) => s.optionChainSnapshot)
 
   const calls = optionChain?.calls ?? []
   const puts = optionChain?.puts ?? []

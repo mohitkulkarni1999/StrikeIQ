@@ -1,10 +1,13 @@
 /**
- * Market Session Service - Prevents duplicate polling
- * Ensures polling starts only once and runs at 10-second intervals
+ * Market Session Service - DISABLED
+ * Market status now comes via WebSocket only
+ * This service is kept for emergency fallback only
  */
 
-let sessionPollingStarted = false;
-let sessionPollingInterval: NodeJS.Timeout | null = null;
+import api from '../api/axios';
+
+let pollingStarted = false;
+let pollingInterval: NodeJS.Timeout | null = null;
 
 export interface MarketSessionData {
     market_status: 'OPEN' | 'CLOSED' | 'PRE_OPEN' | 'OPENING_END' | 'CLOSING' | 'CLOSING_END' | 'HALTED' | 'UNKNOWN';
@@ -21,64 +24,42 @@ export interface MarketSessionResponse {
 }
 
 /**
- * Fetch market session status from backend
+ * Fetch market session status from backend - DISABLED
+ * Components must NEVER call this directly
+ * Market status now comes via WebSocket messages
  */
-async function fetchSession(): Promise<MarketSessionResponse> {
-    try {
-        const response = await fetch('/api/v1/market/session');
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const result = await response.json();
-        return result;
-    } catch (error) {
-        console.error('Market session fetch error:', error);
-        return {
-            status: 'error',
-            error: error instanceof Error ? error.message : 'Failed to fetch market session'
-        };
+async function fetchSession(): Promise<void> {
+    console.warn("⚠️ Market session polling is disabled - using WebSocket only");
+    return;
+}
+
+/**
+ * Start market session polling - DISABLED
+ * Market status now comes via WebSocket messages
+ */
+export function startMarketPolling(): void {
+    console.warn("⚠️ Market session polling is disabled - using WebSocket only");
+    return;
+}
+
+/**
+ * Stop market session polling - DISABLED
+ */
+export function stopMarketPolling(): void {
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+        pollingStarted = false;
+        console.log('🛑 Market session polling stopped (was disabled anyway)');
     }
 }
 
 /**
- * Start market session polling - only once per application lifecycle
- */
-export function startMarketSessionPolling(): void {
-    if (sessionPollingStarted) {
-        console.log('🔒 Market session polling already started - skipping');
-        return;
-    }
-
-    sessionPollingStarted = true;
-    console.log('🚀 Starting market session polling (10s interval)');
-
-    // Initial fetch
-    fetchSession();
-
-    // Set up polling every 10 seconds
-    sessionPollingInterval = setInterval(fetchSession, 10000);
-}
-
-/**
- * Stop market session polling
- */
-export function stopMarketSessionPolling(): void {
-    if (sessionPollingInterval) {
-        clearInterval(sessionPollingInterval);
-        sessionPollingInterval = null;
-        sessionPollingStarted = false;
-        console.log('🛑 Market session polling stopped');
-    }
-}
-
-/**
- * Get current polling status
+ * Get current polling status - ALWAYS FALSE
  */
 export function isSessionPollingActive(): boolean {
-    return sessionPollingStarted && sessionPollingInterval !== null;
+    return false; // Polling is disabled
 }
 
-/**
- * Manual fetch without affecting polling
- */
+// Export fetchSession for testing only - components should NOT use this
 export { fetchSession };

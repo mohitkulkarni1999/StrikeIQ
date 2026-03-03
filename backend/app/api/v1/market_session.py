@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Dict, Any
 import logging
 
-from app.services.market_session_manager import check_market_time
+from app.services.market_session_manager import check_market_time, IST
 
 router = APIRouter(prefix="/api/v1/market", tags=["market-session"])
 logger = logging.getLogger(__name__)
@@ -19,12 +19,16 @@ async def get_market_session():
     """Return current market session"""
 
     try:
+        now = datetime.now(IST)
+        market_open = check_market_time()
+        session = "LIVE" if market_open else "CLOSED"
+        
+        logger.info(f"Market session check → time={now} → open={market_open}")
+        
         return {
-            "status": "success",
-            "data": {
-                "market_open": check_market_time(),
-                "server_time": datetime.now().isoformat()
-            }
+            "market_open": market_open,
+            "session": session,
+            "timestamp": now.isoformat()
         }
 
     except Exception as e:

@@ -1,12 +1,14 @@
-from fastapi import APIRouter, HTTPException, Query, Body
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
-from app.services.token_manager import token_manager
-from app.services.upstox_auth_service import get_upstox_auth_service
 import logging
+from app.services.upstox_auth_service import get_upstox_auth_service
+from app.services.token_manager import token_manager
+from core.logger import auth_logger, start_trace, get_trace_id, clear_trace
 
-router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
 logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/api/v1/auth", tags=["authentication"])
 
 
 class RefreshTokenRequest(BaseModel):
@@ -17,21 +19,20 @@ class RefreshTokenRequest(BaseModel):
 async def auth_status():
     """
     Production-grade authentication status check
-    Validates actual token by calling get_valid_token()
+    Returns authentication status based on Redis token availability
     """
     try:
-        # Attempt to get a valid token - this validates authentication
-        await token_manager.get_valid_token()
+        # Check if token exists in Redis
+        from app.services.token_manager import token_manager
+        auth_state = token_manager.get_auth_state()
         
-        # If we get here, token is valid
-        return {
-            "authenticated": True,
-            "login_url": None
-        }
-            
-    except HTTPException as e:
-        if e.status_code == 401:
-            # Authentication failed - return login URL
+        if auth_state["token_available"]:
+            return {
+                "authenticated": True,
+                "login_url": None
+            }
+        else:
+            # No token available - return login URL
             auth_service = get_upstox_auth_service()
             login_url = auth_service.get_authorization_url()
             
@@ -39,9 +40,6 @@ async def auth_status():
                 "authenticated": False,
                 "login_url": login_url
             }
-        else:
-            # Re-raise non-auth HTTP exceptions
-            raise
             
     except Exception as e:
         logger.error(f"Auth status check failed: {str(e)}")
@@ -66,70 +64,142 @@ def login():
 
 
 @router.get("/upstox/callback")
-async def callback(code: str = Query(None)):
-    auth_service = get_upstox_auth_service()
-
-    if not code:
+async def callback(code: str = Query(None), request: Request = None):
+    # Start trace for OAuth callback
+    trace_id = start_trace()
+    
+    # Log when callback endpoint is hit
+    auth_logger.info(f"OAUTH CALLBACK HIT", { 
+        "trace_id": trace_id,
+        "method": request.method if request else "UNKNOWN",
+        "url": str(request.url) if request else "UNKNOWN",
+        "user_agent": request.headers.get("user-agent") if request else "UNKNOWN"
+    })
+    
+    # Log query parameters
+    query_params = dict(request.query_params) if request else {}
+    auth_logger.info(f"OAUTH CALLBACK QUERY PARAMS", { 
+        "trace_id": trace_id,
+        "params": query_params,
+        "param_count": len(query_params)
+    })
+    
+    # Log received authorization code
+    if code:
+        auth_logger.info(f"OAUTH AUTHORIZATION CODE RECEIVED", { 
+            "trace_id": trace_id,
+            "code_length": len(code),
+            "code_prefix": code[:10] + "..." if len(code) > 10 else code,
+            "has_code": True
+        })
+    else:
+        auth_logger.warning(f"OAUTH AUTHORIZATION CODE MISSING", { 
+            "trace_id": trace_id,
+            "has_code": False
+        })
+        clear_trace()
         raise HTTPException(status_code=400, detail="Authorization code missing")
 
     try:
-        logger.info("Exchanging authorization code...")
-        token_data = await auth_service.exchange_code_for_token(code)
+        # Log token exchange request
+        auth_logger.info(f"OAUTH TOKEN EXCHANGE START", { 
+            "trace_id": trace_id,
+            "code_length": len(code),
+            "exchange_type": "authorization_code"
+        })
         
-        # Use TokenManager's public login method
-        await token_manager.login(
-            access_token=token_data["access_token"],
-            expires_in=token_data.get("expires_in", 3600)
-        )
+        token_data = await token_manager.login(code)
+        
+        # Log full Upstox token response
+        auth_logger.info(f"OAUTH TOKEN EXCHANGE SUCCESS", { 
+            "trace_id": trace_id,
+            "access_token_length": len(token_data.get("access_token", "")),
+            "access_token_prefix": token_data.get("access_token", "")[:10] + "..." if token_data.get("access_token") else "NONE",
+            "refresh_token_length": len(token_data.get("refresh_token", "")),
+            "refresh_token_prefix": token_data.get("refresh_token", "")[:10] + "..." if token_data.get("refresh_token") else "NONE",
+            "token_type": token_data.get("token_type"),
+            "expires_in": token_data.get("expires_in"),
+            "scope": token_data.get("scope"),
+            "response_keys": list(token_data.keys())
+        })
         
         logger.info("Upstox connected successfully")
+        
+        # Auto-start market feed after successful login
+        try:
+            from app.services.websocket_market_feed import ws_feed_manager
+            feed = await ws_feed_manager.start_feed()
+            if feed and feed.is_connected:
+                logger.info("🟢 Market feed auto-started after login")
+                auth_logger.info(f"OAUTH MARKET FEED AUTO-START", { 
+                    "trace_id": trace_id,
+                    "feed_connected": True
+                })
+            else:
+                auth_logger.warning(f"OAUTH MARKET FEED AUTO-START FAILED", { 
+                    "trace_id": trace_id,
+                    "feed_connected": False
+                })
+        except Exception as feed_error:
+            logger.warning(f"Market feed auto-start failed: {feed_error}")
+            auth_logger.error(f"OAUTH MARKET FEED AUTO-START ERROR", { 
+                "trace_id": trace_id,
+                "error": str(feed_error)
+            })
+        
+        # Log redirect to frontend
+        redirect_url = "http://localhost:3000/auth/success?broker=upstox"
+        auth_logger.info(f"OAUTH REDIRECT TO FRONTEND", { 
+            "trace_id": trace_id,
+            "redirect_url": redirect_url,
+            "status_code": 302,
+            "redirect_type": "success"
+        })
+        
+        # Redirect to frontend success page - token stays server-side
+        clear_trace()
+        return RedirectResponse(
+            url=redirect_url,
+            status_code=302
+        )
+        
     except Exception as e:
+        # Log token exchange failure
+        auth_logger.error(f"OAUTH TOKEN EXCHANGE FAILED", { 
+            "trace_id": trace_id,
+            "error": str(e),
+            "error_type": type(e).__name__,
+            "code_length": len(code) if code else 0
+        })
+        
         logger.error(f"Token exchange failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-    return RedirectResponse(
-        url="http://localhost:3000/auth/success?upstox=connected",
-        status_code=302
-    )
+        
+        # Log redirect to frontend error page
+        error_redirect_url = "http://localhost:3000/auth/error?message=authentication_failed"
+        auth_logger.info(f"OAUTH REDIRECT TO FRONTEND", { 
+            "trace_id": trace_id,
+            "redirect_url": error_redirect_url,
+            "status_code": 302,
+            "redirect_type": "error",
+            "error_message": "authentication_failed"
+        })
+        
+        clear_trace()
+        # Redirect to frontend error page
+        return RedirectResponse(
+            url=error_redirect_url,
+            status_code=302
+        )
 
 
 @router.post("/refresh")
 async def refresh_token(request: RefreshTokenRequest):
     """
     Refresh access token using refresh token
-    Returns new access token with expiration time
+    NOTE: Upstox does not support automatic token refresh
     """
-    try:
-        # For now, we'll use the token manager's refresh capability
-        # In a full implementation, we'd validate the refresh_token parameter
-        logger.info("Token refresh request received")
-        
-        # Force refresh the token using token manager
-        new_access_token = await token_manager.force_refresh()
-        
-        # Calculate expires_in (default to 1 hour from now)
-        expires_in = 3600
-        
-        logger.info("Token refreshed successfully")
-        
-        return {
-            "access_token": new_access_token,
-            "expires_in": expires_in
-        }
-        
-    except HTTPException as e:
-        if e.status_code == 401:
-            logger.warning("Token refresh failed: Invalid authentication")
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid or expired refresh token"
-            )
-        else:
-            raise
-            
-    except Exception as e:
-        logger.error(f"Token refresh error: {str(e)}")
-        raise HTTPException(
-            status_code=500,
-            detail="Token refresh failed"
-        )
+    logger.warning("Token refresh requested - not supported by Upstox")
+    raise HTTPException(
+        status_code=400,
+        detail="Token refresh not supported - please regenerate access token via OAuth"
+    )

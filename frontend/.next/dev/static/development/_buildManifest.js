@@ -1,9 +1,6 @@
 self.__BUILD_MANIFEST = {
-  "/": [
-    "static/chunks/pages/index.js"
-  ],
-  "/_error": [
-    "static/chunks/pages/_error.js"
+  "/dashboard": [
+    "static/chunks/pages/dashboard.js"
   ],
   "__rewrites": {
     "afterFiles": [
@@ -16,12 +13,15 @@ self.__BUILD_MANIFEST = {
   },
   "sortedPages": [
     "/",
+    "/AuthSuccess",
     "/IntelligenceDashboard",
     "/IntelligenceDashboardFinal",
     "/_app",
     "/_error",
     "/auth",
     "/auth/error",
-    "/auth/success"
+    "/auth/success",
+    "/dashboard",
+    "/production"
   ]
 };self.__BUILD_MANIFEST_CB && self.__BUILD_MANIFEST_CB()

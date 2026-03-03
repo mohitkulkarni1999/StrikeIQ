@@ -683,3 +683,11 @@ class MarketStateManager:
             state.rest_last_update = datetime.now(timezone.utc)
             
             print(f"[MarketStateManager] Updated REST spot for {symbol}: {spot_price}")
+
+
+# Singleton instance
+_market_state_manager = MarketStateManager()
+
+def get_market_state_manager() -> MarketStateManager:
+    """Get the singleton MarketStateManager instance"""
+    return _market_state_manager

@@ -6,13 +6,21 @@ const api = axios.create({
   timeout: 5000
 })
 
+// 401 AUTH FALLBACK ONLY
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error) => {
 
     if (error.code === "ERR_NETWORK") {
       console.warn("Backend offline")
       return Promise.resolve({ data: { status: "offline" } })
+    }
+
+    // 401 FALLBACK: Only log error - NO automatic redirects
+    if (error.response?.status === 401) {
+      console.warn("🔐 401 received - authentication expired")
+      // Removed automatic redirect - auth is now manual only
+      return Promise.reject(error)
     }
 
     if (error.response?.status >= 500) {

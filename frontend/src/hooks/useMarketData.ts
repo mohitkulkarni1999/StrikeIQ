@@ -7,13 +7,13 @@ import { useWSStore } from '../core/ws/wsStore';
 
 export function useMarketData() {
   const marketData = useWSStore((state) => state.marketData);
-  const isConnected = useWSStore((state) => state.isConnected);
+  const connected = useWSStore((state) => state.connected);
   const error = useWSStore((state) => state.error);
 
   return {
     data: marketData,
-    isConnected,
+    isConnected: connected,
     error,
-    loading: !marketData && isConnected
+    loading: !marketData && connected
   };
 }

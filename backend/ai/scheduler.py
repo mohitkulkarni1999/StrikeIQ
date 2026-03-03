@@ -80,11 +80,11 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error setting up scheduler jobs: {e}")
     
-    def signal_generation_job(self):
+    async def signal_generation_job(self):
         """Job for generating AI signals"""
         try:
             # Check if market is open before running AI
-            if not self.market_session_manager.is_market_open():
+            if not await self.market_session_manager.is_market_open():
                 logger.debug("Market closed - skipping signal generation")
                 return
                 
@@ -95,11 +95,11 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error in signal generation job: {e}")
     
-    def paper_trade_monitor_job(self):
+    async def paper_trade_monitor_job(self):
         """Job for monitoring paper trades"""
         try:
             # Check if market is open before running AI
-            if not self.market_session_manager.is_market_open():
+            if not await self.market_session_manager.is_market_open():
                 logger.debug("Market closed - skipping paper trade monitor")
                 return
                 
@@ -110,11 +110,11 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error in paper trade monitor job: {e}")
     
-    def new_prediction_processing_job(self):
+    async def new_prediction_processing_job(self):
         """Job for processing new predictions into paper trades"""
         try:
             # Check if market is open before running AI
-            if not self.market_session_manager.is_market_open():
+            if not await self.market_session_manager.is_market_open():
                 logger.debug("Market closed - skipping prediction processing")
                 return
                 
@@ -125,11 +125,11 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error in new prediction processing job: {e}")
     
-    def outcome_checker_job(self):
+    async def outcome_checker_job(self):
         """Job for checking prediction outcomes"""
         try:
             # Check if market is open before running AI
-            if not self.market_session_manager.is_market_open():
+            if not await self.market_session_manager.is_market_open():
                 logger.debug("Market closed - skipping outcome checker")
                 return
                 
@@ -140,11 +140,11 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error in outcome checker job: {e}")
     
-    def learning_update_job(self):
+    async def learning_update_job(self):
         """Job for updating AI learning"""
         try:
             # Check if market is open before running AI
-            if not self.market_session_manager.is_market_open():
+            if not await self.market_session_manager.is_market_open():
                 logger.debug("Market closed - skipping learning update")
                 return
                 
@@ -155,16 +155,66 @@ class AIScheduler:
         except Exception as e:
             logger.error(f"Error in learning update job: {e}")
     
-    def market_snapshot_job(self):
+    async def market_snapshot_job(self):
         """Job for collecting market snapshots"""
         try:
-            # This would collect real market data
-            # For now, create sample snapshots
-            self.create_sample_market_snapshot()
+            # Check if market is open before collecting snapshots
+            if not await self.market_session_manager.is_market_open():
+                logger.debug("Market closed - skipping market snapshot")
+                return
+                
+            # Collect real market snapshot
+            await self.collect_real_market_snapshot()
+                    
         except Exception as e:
             logger.error(f"Error in market snapshot job: {e}")
     
-    def create_sample_market_snapshot(self):
+    async def collect_real_market_snapshot(self):
+        """Collect real market snapshot from market data API"""
+        try:
+            from app.market_data.market_data_service import get_latest_option_chain
+            
+            # Get real market data for NIFTY
+            market_data = await get_latest_option_chain("NIFTY")
+            
+            if market_data and 'spot_price' in market_data:
+                spot_price = float(market_data.get('spot_price', 0))
+                
+                # Calculate PCR from option chain
+                total_call_oi = 0
+                total_put_oi = 0
+                
+                if 'option_chain' in market_data:
+                    for option in market_data['option_chain']:
+                        if 'call_oi' in option:
+                            total_call_oi += float(option.get('call_oi', 0))
+                        if 'put_oi' in option:
+                            total_put_oi += float(option.get('put_oi', 0))
+                
+                pcr = total_put_oi / total_call_oi if total_call_oi > 0 else 1.0
+                atm_strike = round(spot_price / 50) * 50
+                
+                from ai.ai_db import ai_db
+                
+                query = """
+                    INSERT INTO market_snapshot 
+                    (symbol, spot_price, pcr, total_call_oi, total_put_oi, atm_strike)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                
+                params = ("NIFTY", spot_price, pcr, total_call_oi, total_put_oi, atm_strike)
+                ai_db.execute_query(query, params)
+                
+                logger.info(f"Market snapshot stored: NIFTY @ {spot_price}, PCR: {pcr:.2f}")
+            else:
+                logger.warning("Market snapshot unavailable")
+                return
+                
+        except Exception as e:
+            logger.error(f"Error collecting real market snapshot: {e}")
+            return
+    
+    async def create_sample_market_snapshot(self):
         """Create sample market snapshot for AI analysis"""
         try:
             import random
@@ -186,6 +236,8 @@ class AIScheduler:
             
             params = ("NIFTY", spot_price, pcr, total_call_oi, total_put_oi, atm_strike)
             ai_db.execute_query(query, params)
+            
+            logger.info(f"Sample market snapshot stored: NIFTY @ {spot_price:.2f}, PCR: {pcr:.2f}")
             
         except Exception as e:
             logger.error(f"Error creating sample market snapshot: {e}")

@@ -6,12 +6,15 @@ from fastapi import WebSocket, WebSocketDisconnect, APIRouter, HTTPException
 
 from app.services.websocket_market_feed import ws_feed_manager
 from app.services.upstox_auth_service import get_upstox_auth_service
-from app.services.instrument_registry import get_instrument_registry   # ✅ FIXED
+from app.services.instrument_registry import get_instrument_registry
 from app.services.live_chain_manager import chain_manager
 from app.core.ws_manager import manager
 
 router = APIRouter(prefix="/ws", tags=["websocket"])
 logger = logging.getLogger(__name__)
+
+# Global dict for market status checks
+upstox_feeds = {}
 
 
 @router.websocket("/live-options/{symbol}")
@@ -45,7 +48,7 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
                 })
             except Exception:
                 logger.warning("Client disconnected during auth error")
-            await websocket.close(code=4401)  # custom auth failure code
+            await websocket.close(code=4401)
             return
         except Exception as e:
             logger.error(f" WS INTERNAL ERROR → {str(e)}")
@@ -57,7 +60,7 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
                 })
             except Exception:
                 logger.warning("Client disconnected during internal error")
-            await websocket.close(code=1011)  # internal error
+            await websocket.close(code=1011)
             return
 
     if not ws_feed:
@@ -87,16 +90,15 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
                 logger.warning("Client disconnected during token error")
             return
 
-        # ✅ GET SINGLETON REGISTRY
+        # GET SINGLETON REGISTRY
         registry = get_instrument_registry()
 
-        # ✅ WAIT UNTIL READY
+        # WAIT UNTIL READY
         await registry.wait_until_ready()
 
-        # BUG 2 — FIX symbol_upper not defined
         symbol_upper = symbol.upper()
         
-        # PATCH 4 — PREVENT INVALID EXPIRY LOOP
+        # VALIDATE EXPIRY
         valid_expiries = registry.options.get(symbol_upper, {}).keys()
         
         if expiry not in valid_expiries:
@@ -107,23 +109,19 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
                 })
             except Exception:
                 logger.warning("Client disconnected")
-            return
             await websocket.close(code=1008)
             return
         
         logger.info(f"✅ Expiry validated: {symbol_upper}:{expiry}")
         
         # PER EXPIRY BUILDER - OFFLOAD TO BACKGROUND TASK
-        # Convert expiry string to date object for registry compatibility
         expiry_date = datetime.strptime(expiry, "%Y-%m-%d").date()
         
-        # Start builder in background task to prevent blocking WebSocket handshake
+        # Start builder in background task
         builder_task = asyncio.create_task(
             chain_manager.get_builder(symbol, expiry_date)
         )
         
-        # Don't await here - let it run in background
-        # We'll handle the builder when it's ready
         builder = None
 
         # REGISTER CLIENT
@@ -131,7 +129,7 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
 
         logger.info(f"WS REGISTERED → {key}")
 
-        # 🔥 CRITICAL FIX: Handle builder in background
+        # Handle builder in background
         async def handle_builder_ready():
             try:
                 builder = await builder_task
@@ -142,7 +140,7 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
                     chain_state = builder.get_latest_option_chain()
                     if chain_state:
                         chain_data = chain_state.build_final_chain()
-                        logger.info(f"🔍 [INITIAL CHAIN] {symbol_upper}: spot={chain_data.get('spot')}, spot_price={chain_data.get('spot_price')}")
+                        logger.info(f"🔍 [INITIAL CHAIN] {symbol_upper}: spot={chain_data.get('spot')}")
                         await websocket.send_json({
                             "type": "chain_update",
                             "data": chain_data
@@ -162,15 +160,12 @@ async def websocket_endpoint(websocket: WebSocket, symbol: str):
         # Start background task for builder handling
         asyncio.create_task(handle_builder_ready())
 
+        # CRITICAL FIX: Passive keepalive loop.
+        # Do NOT use receive_text() — frontend does not send messages.
+        # Server broadcasts chain_update via manager.broadcast_json().
         try:
             while True:
-                # Send periodic heartbeat to prevent connection timeout
-                try:
-                    await asyncio.wait_for(websocket.receive_text(), timeout=20.0)
-                except asyncio.TimeoutError:
-                    # Send heartbeat if no message received within 20 seconds
-                    await websocket.send_json({"type": "heartbeat"})
-                    continue
+                await asyncio.sleep(60)
 
         except WebSocketDisconnect:
             logger.info(f"WS DISCONNECTED → {key}")

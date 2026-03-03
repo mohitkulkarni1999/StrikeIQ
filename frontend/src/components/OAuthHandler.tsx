@@ -25,10 +25,7 @@ export default function OAuthHandler({ onAuthSuccess }: OAuthHandlerProps) {
       // Trigger auth success callback immediately
       onAuthSuccess();
       
-      // Then redirect to dashboard after a short delay
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 500);
+      // NO REDIRECT HERE - Let RouteGuard handle navigation
     }
   }, [onAuthSuccess]);
 

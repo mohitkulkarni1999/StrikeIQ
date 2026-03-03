@@ -1,12 +1,9 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState } from "react";
 import { Wifi, WifiOff, Heart, BarChart2, Link2, Activity, Bell } from "lucide-react";
-import { useWSStore } from "../../core/ws/wsStore";
-import { WS_BACKEND_ONLINE_EVENT } from "../../hooks/useLiveMarketData";
-import api from "../../api/axios";
-
-const NAVBAR_HEALTH_POLL_MS = 10000;
+import { useMarketStore } from "@/stores/marketStore";
+import { uiLogger, traceManager } from "../../utils/logger";
 
 const HEARTBEAT_CSS = `
 @keyframes ws-heartbeat {
@@ -45,87 +42,26 @@ function scrollToSection(sectionId: string) {
 }
 
 export default function Navbar() {
-
-  const connected = useWSStore((s) => s.connected);
-  const marketStatus = useWSStore((s) => s.marketStatus);
-  const setMarketStatus = useWSStore((s) => s.setMarketStatus);
-
-  const [backendAlive, setBackendAlive] = useState(true);
-  const prevAliveRef = useRef<boolean | null>(null);
+  const connected = useMarketStore((s) => s.connected);
+  const marketOpen = useMarketStore((s) => s.marketOpen);
 
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
-  const OPEN_STATES = ["OPEN", "PRE_OPEN", "OPENING_END"];
+  // Log when component reads store state
+  const traceId = traceManager.getTraceId();
+  uiLogger.info("UI MARKET STATUS RENDER", { traceId, connected, marketOpen });
 
-  const marketColor =
-    OPEN_STATES.includes(marketStatus)
-      ? "bg-green-500"
-      : marketStatus === "CLOSED"
-      ? "bg-red-500"
-      : "bg-gray-500";
+  // Market status display logic - NO API calls, only store state
+  let marketStatusText = "Checking Market...";
+  let marketColor = "bg-gray-500";
 
-  const wsGreen = backendAlive && connected;
-  const wsRed = backendAlive && !connected;
-  const wsGrey = !backendAlive;
-
-  useEffect(() => {
-    const probe = async () => {
-      let alive = false;
-
-      try {
-        const res = await fetch("/api/v1/market/session", {
-          method: "GET",
-          credentials: "include",
-        });
-
-        alive = res.ok;
-      } catch {
-        alive = false;
-      }
-
-      setBackendAlive(alive);
-
-      if (alive && prevAliveRef.current === false) {
-        window.dispatchEvent(new CustomEvent(WS_BACKEND_ONLINE_EVENT));
-      }
-
-      prevAliveRef.current = alive;
-    };
-
-    probe();
-
-    const id = setInterval(probe, NAVBAR_HEALTH_POLL_MS);
-
-    return () => clearInterval(id);
-  }, []);
-
-  useEffect(() => {
-    const fetchStatus = async () => {
-      try {
-        const response = await api.get("/api/v1/market/session");
-        const result = response.data;
-
-        if (result?.status === "success" && result?.data?.market_status) {
-          setMarketStatus(result.data.market_status);
-        } else if (result?.market_status) {
-          setMarketStatus(result.market_status);
-        }
-      } catch {
-        console.warn("Navbar: failed to fetch market status");
-      }
-    };
-
-    fetchStatus();
-    const id = setInterval(fetchStatus, 60000);
-    return () => clearInterval(id);
-  }, []);
-
-  const handleTabClick = (tab: typeof NAV_TABS[number]) => {
-    setActiveTab(tab.id);
-    scrollToSection(tab.sectionId);
-  };
-
-  const marketOpen = OPEN_STATES.includes(marketStatus);
+  if (marketOpen === true) {
+    marketStatusText = "Market Open";
+    marketColor = "bg-green-500";
+  } else if (marketOpen === false) {
+    marketStatusText = "Market Closed";
+    marketColor = "bg-red-500";
+  }
 
   return (
     <>
@@ -166,7 +102,10 @@ export default function Navbar() {
                 return (
                   <button
                     key={tab.id}
-                    onClick={() => handleTabClick(tab)}
+                    onClick={() => {
+                      setActiveTab(tab.id);
+                      scrollToSection(tab.sectionId);
+                    }}
                     className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
                       active
                         ? "bg-cyan-500/20 border border-cyan-400/30 text-cyan-400"
@@ -184,30 +123,40 @@ export default function Navbar() {
             {/* Status */}
             <div className="flex items-center gap-3">
 
-              {/* Market */}
+              {/* Market - NO API calls, only store state */}
               <div 
                 className="px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"
                 style={{
-                  background: marketOpen 
+                  background: marketOpen === true 
                     ? 'rgba(34,197,94,0.12)' 
-                    : 'rgba(255,70,70,0.12)',
-                  color: marketOpen 
+                    : marketOpen === false
+                    ? 'rgba(255,70,70,0.12)'
+                    : 'rgba(156,163,175,0.12)',
+                  color: marketOpen === true 
                     ? '#4ade80' 
-                    : '#ff6b6b',
-                  border: marketOpen 
+                    : marketOpen === false
+                    ? '#ff6b6b'
+                    : '#9ca3af',
+                  border: marketOpen === true 
                     ? '1px solid rgba(34,197,94,0.35)' 
-                    : '1px solid rgba(255,70,70,0.35)',
+                    : marketOpen === false
+                    ? '1px solid rgba(255,70,70,0.35)'
+                    : '1px solid rgba(156,163,175,0.35)',
                   borderRadius: '8px',
                   padding: '4px 10px'
                 }}
               >
-                {marketOpen ? (
+                {marketOpen === true ? (
                   <>
                     <Wifi size={12} /> OPEN
                   </>
-                ) : (
+                ) : marketOpen === false ? (
                   <>
                     <WifiOff size={12} /> CLOSED
+                  </>
+                ) : (
+                  <>
+                    <Wifi size={12} /> {marketStatusText}
                   </>
                 )}
               </div>
@@ -215,26 +164,25 @@ export default function Navbar() {
               {/* WebSocket Heart */}
               <div
                 className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border"
-                style={
-                  wsGreen
-                    ? { background: "rgba(34,197,94,0.07)", border: "1px solid rgba(34,197,94,0.25)" }
-                    : wsRed
-                    ? { background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.18)" }
-                    : { background: "rgba(156,163,175,0.06)", border: "1px solid rgba(156,163,175,0.18)" }
-                }
+                style={{
+                  background: connected 
+                    ? "rgba(34,197,94,0.07)" 
+                    : "rgba(239,68,68,0.06)",
+                  border: connected 
+                    ? "1px solid rgba(34,197,94,0.25)" 
+                    : "1px solid rgba(239,68,68,0.18)",
+                }}
               >
                 <Heart
                   style={{
                     width: 13,
                     height: 13,
                     flexShrink: 0,
-                    color: wsGreen ? "#4ade80" : wsRed ? "#f87171" : "#9ca3af",
-                    fill: wsGreen
+                    color: connected ? "#4ade80" : "#f87171",
+                    fill: connected
                       ? "rgba(34,197,94,0.50)"
-                      : wsRed
-                      ? "rgba(239,68,68,0.32)"
-                      : "rgba(148,163,184,0.25)",
-                    animation: wsGreen ? "ws-heartbeat 0.85s ease-in-out infinite" : "none",
+                      : "rgba(239,68,68,0.32)",
+                    animation: connected ? "ws-heartbeat 0.85s ease-in-out infinite" : "none",
                     transformOrigin: "center",
                   }}
                 />
@@ -242,7 +190,7 @@ export default function Navbar() {
                 {/* ECG Graph */}
                 <div className="hidden sm:block" style={{ width: 34, height: 15, overflow: "hidden" }}>
                   <svg viewBox="0 0 120 36" width="34" height="15">
-                    {wsGreen ? (
+                    {connected ? (
                       <path
                         d="M0,18 L28,18 L38,18 L46,4 L53,32 L60,18 L68,18 L75,10 L81,26 L87,18 L120,18"
                         fill="none"
@@ -260,7 +208,7 @@ export default function Navbar() {
                       <path
                         d="M0,18 L120,18"
                         fill="none"
-                        stroke={wsRed ? "#f87171" : "#9ca3af"}
+                        stroke="#f87171"
                         strokeWidth="1.5"
                         strokeLinecap="round"
                         style={{ animation: "flatline-blink 2s ease-in-out infinite" }}

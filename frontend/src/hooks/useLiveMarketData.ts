@@ -1,7 +1,13 @@
+/**
+ * useLiveMarketData - READ ONLY hook for live market data.
+ * 
+ * This hook READS ONLY from wsStore and optionChainStore.
+ * It does NOT create WebSocket connections.
+ */
+
 import { useState, useEffect, useRef } from "react"
 import { useWSStore } from "@/core/ws/wsStore"
 import { useOptionChainStore } from "@/core/ws/optionChainStore"
-import { clearWSInitialized } from "@/core/ws/wsInitController"
 import { throttle } from "@/utils/throttle"
 
 export interface LiveMarketData {
@@ -10,6 +16,7 @@ export interface LiveMarketData {
   timestamp: string
   change?: number
   change_percent?: number
+  analytics_enabled?: boolean
   available_expiries?: string[]
   optionChain?: {
     symbol: string
@@ -18,184 +25,74 @@ export interface LiveMarketData {
     calls: any[]
     puts: any[]
   } | null
-  intelligence?: {
-    interpretation: {
-      narrative: string | null;
-      risk_context: string | null;
-      positioning_context: string | null;
-      contradiction_flags: string[];
-      confidence_tone: 'high' | 'medium' | 'cautious';
-      interpreted_at?: string;
-      fallback?: boolean;
-    };
-  };
+  analytics?: any
+  intelligence?: any
 }
 
-export const WS_BACKEND_ONLINE_EVENT = "strikeiq:backend-online"
-
 export function useLiveMarketData(symbol: string, expiry: string | null) {
-
-  const initializedRef = useRef(false)
-  const connectedRef = useRef(false)
-
   const [data, setData] = useState<LiveMarketData | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [mode, setMode] = useState<"loading" | "snapshot" | "live" | "error">("snapshot")
 
-  const [mode, setMode] = useState<"loading" | "snapshot" | "live" | "error">("loading")
+  // READ ONLY from stores
+  const { spot, lastUpdate, connected } = useWSStore()
+  const { optionChainData, optionChainLastUpdate } = useOptionChainStore()
 
-  const {
-    spot,
-    lastUpdate,
-    connected,
-    connect
-  } = useWSStore()
-
-  const {
-    optionChainData,
-    optionChainLastUpdate,
-    optionChainConnected
-  } = useOptionChainStore()
-
-  /*
-  -------------------------------
-  CONNECT WEBSOCKET
-  -------------------------------
-  */
-
-  useEffect(() => {
-
-    if (connectedRef.current) return
-    connectedRef.current = true
-
-    if (symbol && expiry) {
-      connect(symbol, expiry)
-    }
-
-  }, [symbol, expiry])
-
-  /*
-  -------------------------------
-  TRANSFORM STORE DATA → UI DATA (THROTTLED)
-  -------------------------------
-  */
-
-  // Create throttled update function (100ms delay)
+  // Throttled update function
   const throttledSetData = useRef(
     throttle((transformedData: LiveMarketData) => {
-      setData(transformedData);
-      setMode("live");
-      setLoading(false);
-      setError(null);
+      setData(transformedData)
+      setMode("live")
+      setLoading(false)
+      setError(null)
+      console.log("📊 UI RENDER: spot=", transformedData.spot, "symbol=", transformedData.symbol)
     }, 100)
-  ).current;
+  ).current
 
   useEffect(() => {
-
-    if (spot === 0 && !optionChainData) return
-
+    // Transform store data → UI data
     const transformed: LiveMarketData = {
-
       symbol,
-
       spot: spot || optionChainData?.spot || 0,
-
       timestamp: new Date(lastUpdate || optionChainLastUpdate).toISOString(),
-
+      analytics_enabled: optionChainData?.analytics_enabled,
       available_expiries: [],
-
       optionChain: optionChainData
         ? {
-            symbol: optionChainData.symbol || symbol,
-            spot: optionChainData.spot || spot,
-            expiry: optionChainData.expiry || expiry || "",
-            calls: optionChainData.calls || [],
-            puts: optionChainData.puts || []
-          }
-        : null
-
+          symbol: optionChainData.symbol || symbol,
+          spot: optionChainData.spot || spot,
+          expiry: optionChainData.expiry || expiry || "",
+          calls: optionChainData.calls || [],
+          puts: optionChainData.puts || []
+        }
+        : null,
+      analytics: optionChainData?.analytics,
+      intelligence: optionChainData?.intelligence
     }
 
-    // Use throttled update instead of direct setState
     throttledSetData(transformed)
-
   }, [spot, optionChainData, lastUpdate, optionChainLastUpdate, symbol, expiry])
 
-  /*
-  -------------------------------
-  CONNECTION STATUS
-  -------------------------------
-  */
-
   useEffect(() => {
-
-    if (!connected) {
-
-      setLoading(true)
-      setMode("loading")
-
+    // Handle connection status
+    if (!connected && !data) {
+      setLoading(false)
+      setMode("snapshot")
+    } else if (connected && data) {
+      setMode("live")
+      setLoading(false)
     }
-
-  }, [connected])
-
-  /*
-  -------------------------------
-  BACKEND RESTART HANDLER
-  -------------------------------
-  */
-
-  useEffect(() => {
-
-    const handleBackendOnline = () => {
-
-      const store = useWSStore.getState()
-
-      store.disconnect()
-
-      clearWSInitialized()
-
-      setMode("loading")
-      setLoading(true)
-      setError(null)
-
-      if (symbol && expiry) {
-        connect(symbol, expiry)
-      }
-
-    }
-
-    window.addEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline)
-
-    return () => {
-      window.removeEventListener(WS_BACKEND_ONLINE_EVENT, handleBackendOnline)
-    }
-
-  }, [symbol, expiry])
-
-  /*
-  -------------------------------
-  RETURN DATA
-  -------------------------------
-  */
+  }, [connected, data])
 
   return {
-
     data,
-
     loading,
-
     error,
-
     mode,
-
     connected,
-
     symbol,
-
     lastUpdate: data?.timestamp || new Date().toISOString(),
-
     availableExpiries: []
-
   }
-
 }

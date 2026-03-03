@@ -183,17 +183,17 @@ class UpstoxMarketFeed:
         """
         try:
             # STEP 2: AUTHORIZE AFTER WAIT
-            logger.info(f"Authorizing WebSocket feed for {self.config.symbol} (attempt {self.connection_attempts})")
+            logger.info(f"UPSTOX CONNECTING - {self.config.symbol} (attempt {self.connection_attempts})")
             authorized_url = await self.get_authorized_websocket_url()
             
             if not authorized_url:
-                logger.error(f"Failed to get authorized URL for {self.config.symbol}")
+                logger.error(f"UPSTOX AUTH FAILED - {self.config.symbol}")
                 return False
             
-            logger.debug(f"Connecting to Upstox feed: {self.config.symbol}")
+            logger.debug(f"UPSTOX WS CONNECTING - {self.config.symbol}")
             
             # STEP 3: CONNECT IMMEDIATELY (< 1s)
-            logger.warning(f"=== WS HANDSHAKE START (IMMEDIATE) - {self.config.symbol} ===")
+            logger.warning(f"=== UPSTOX WS HANDSHAKE START - {self.config.symbol} ===")
             
             # Upstox V3 requires subprotocol "json"
             self.websocket = await websockets.connect(
@@ -203,21 +203,22 @@ class UpstoxMarketFeed:
                 ping_timeout=10
             )
             
-            logger.warning(f"WebSocket subprotocol selected: {self.websocket.subprotocol}")
-            logger.warning(f"=== WS HANDSHAKE SUCCESS - {self.config.symbol} ===")
+            logger.warning(f"UPSTOX WS CONNECTED - {self.config.symbol}")
+            logger.warning(f"=== UPSTOX WS HANDSHAKE SUCCESS - {self.config.symbol} ===")
             
             # STEP 1 & 2: Send subscription message for index instrument immediately after connect
             success = await self._subscribe_index()
             if not success:
-                logger.error("INDEX subscription failed during handshake")
+                logger.error(f"UPSTOX INDEX SUBSCRIPTION FAILED - {self.config.symbol}")
                 return False
             
             self.ws_connected = True
             self.connection_attempts = 0  # Reset on success
+            logger.info(f"UPSTOX CONNECTED - {self.config.symbol}")
             return True
             
         except Exception as ws_error:
-            logger.error(f"WebSocket handshake failed for {self.config.symbol}: {ws_error}")
+            logger.error(f"UPSTOX WS HANDSHAKE FAILED - {self.config.symbol}: {ws_error}")
             return False
 
     async def connect_to_feed(self) -> bool:
@@ -333,8 +334,8 @@ class UpstoxMarketFeed:
         """
         # This would contain the connection logic for a specific symbol
         # For now, we'll use the existing connection logic
-        if not self.is_connected:
-            success = await self.connect()
+        if not self.ws_connected:
+            success = await self.connect_to_feed()
             if not success:
                 logger.error(f"Failed to connect to feed for {symbol}")
                 return
@@ -534,6 +535,25 @@ class UpstoxMarketFeed:
                         self._fo_boost_done = True
 
                 # ======================================
+                # BROADCAST MARKET TICK TO FRONTEND ✅
+                # ======================================
+                if instrument_key == self.config.spot_instrument_key:
+                    ltp = processed_data.get("ltp")
+                    if ltp:
+                        # Broadcast to frontend WebSocket
+                        from app.core.ws_manager import manager
+                        
+                        broadcast_message = {
+                            "type": "market_data",
+                            "instrument": instrument_key,
+                            "ltp": ltp
+                        }
+                        
+                        logger.info(f"MARKET DATA EXTRACTED - instrument={instrument_key} ltp={ltp}")
+                        await manager.broadcast_json("market_data", broadcast_message)
+                        logger.info(f"WS BROADCAST SENT - instrument={instrument_key} ltp={ltp}")
+
+                # ======================================
                 # LIVE CHAIN BUILDER PUSH  ✅ FINAL FIX
                 # ======================================
 
@@ -582,14 +602,18 @@ class UpstoxMarketFeed:
         Supports both JSON and Binary (Protobuf).
         """
         try:
+            logger.info("UPSTOX RAW MESSAGE RECEIVED")
+            
             if isinstance(message, bytes):
                 # Binary message -> Protobuf
+                logger.info("UPSTOX BINARY MESSAGE - Parsing protobuf")
                 ticks = parse_upstox_feed(message)
                 if ticks:
+                    logger.info(f"UPSTOX PROTOBUF DECODE SUCCESS - {len(ticks)} ticks")
                     # Convert tick list to feeds dict format for compatibility
                     feeds_dict = {}
                     for tick in ticks:
-                        instrument_key = tick.get("symbol")
+                        instrument_key = tick.get("instrument_key")
                         ltp = tick.get("ltp")
                         if instrument_key and ltp:
                             feeds_dict[instrument_key] = {
@@ -605,25 +629,24 @@ class UpstoxMarketFeed:
                                     "iv": 0
                                 }
                             }
-                        
-                        # STEP 4: Ensure latest_ticks updated in message receive loop
-                        # This happens in process_live_feed, but let's be explicit if needed.
-                        # We'll stick to process_live_feed for consistency.
                     
                     data = {
                         "feeds": feeds_dict,
                         "currentTs": int(datetime.now().timestamp() * 1000)
                     }
+                    logger.info("UPSTOX MARKET DATA EXTRACTED - Processing feed")
                     await self.process_live_feed(data)
                 return
 
             # JSON message -> Session management or market data
+            logger.info("UPSTOX JSON MESSAGE - Parsing")
             data = json.loads(message)
             await self.process_live_feed(data)
             self.last_heartbeat = datetime.now(timezone.utc)
+            logger.info("UPSTOX MESSAGE PROCESSED")
         except Exception as e:
-            logger.error(f"Failed to process message: {e}")
-
+            logger.error(f"UPSTOX MESSAGE PROCESSING ERROR: {e}")
+    
     async def run_feed_loop(self) -> None:
         """
         Main feed loop - connect, subscribe, and process messages

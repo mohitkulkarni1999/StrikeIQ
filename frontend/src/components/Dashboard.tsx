@@ -4,8 +4,10 @@ import React, { useState, useEffect, memo } from 'react';
 import { Activity, Database } from 'lucide-react';
 import { useLiveMarketData } from '../hooks/useLiveMarketData';
 import { useExpirySelector } from '../hooks/useExpirySelector';
+import { useMarketStore } from '../stores/marketStore';
 import { useModeGuard, useEffectiveSpot, useSnapshotAnalytics, useTimeoutProtection } from './SafeModeGuard';
 import DebugBadge from './DebugBadge';
+import SymbolSelector from './SymbolSelector';
 import AIInterpretationPanel from './AIInterpretationPanel';
 import AICommandCenter from './AICommandCenter';
 import OIHeatmap from './OIHeatmap';
@@ -29,9 +31,18 @@ const MemoizedAICommandCenter = memo(AICommandCenter);
 interface DashboardProps { initialSymbol?: string; }
 
 export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
-  const [symbol] = useState(initialSymbol);
+  // Initialize store with initial symbol if needed
+  const setCurrentSymbol = useMarketStore(state => state.setCurrentSymbol);
+  const currentSymbol = useMarketStore(state => state.currentSymbol);
+  
+  useEffect(() => {
+    // Only set initial symbol if store symbol is still default
+    if (currentSymbol === 'NIFTY' && initialSymbol !== 'NIFTY') {
+      setCurrentSymbol(initialSymbol);
+    }
+  }, [initialSymbol, setCurrentSymbol, currentSymbol]);
 
-  // Use expiry selector hook
+  // Use expiry selector hook - reads symbol from store automatically
   const {
     expiryList,
     selectedExpiry,
@@ -39,9 +50,9 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
     expiryError,
     handleExpiryChange,
     optionChainConnected
-  } = useExpirySelector(symbol);
+  } = useExpirySelector();
 
-  const { data, error, loading, mode } = useLiveMarketData(symbol, selectedExpiry);
+  const { data, error, loading, mode } = useLiveMarketData(currentSymbol, selectedExpiry);
   
   const isLiveMode = useModeGuard(mode, 'LIVE');
   const isSnapshotMode = useModeGuard(mode, 'SNAPSHOT');
@@ -98,6 +109,33 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
         grid-column: 1 / -1;
       }
       
+      .chip {
+        background: rgba(255,255,255,0.1);
+        border: 1px solid rgba(255,255,255,0.2);
+        border-radius: 20px;
+        padding: 8px 16px;
+        color: white;
+        cursor: pointer;
+        transition: all 0.2s ease;
+        font-weight: 500;
+      }
+      
+      .chip:hover {
+        background: rgba(255,255,255,0.2);
+        border-color: rgba(255,255,255,0.3);
+      }
+      
+      .chip-active {
+        background: linear-gradient(135deg, #3b82f6, #1d4ed8);
+        border: 1px solid #3b82f6;
+        border-radius: 20px;
+        padding: 8px 16px;
+        color: white;
+        cursor: pointer;
+        font-weight: 600;
+        box-shadow: 0 2px 8px rgba(59, 130, 246, 0.3);
+      }
+      
       /* Typography System */
       .panel-title {
         font-size: 14px;
@@ -130,7 +168,8 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
   // ── State guards ──────────────────────────────────────────────────────────
   if (loading) return mode === 'snapshot' ? <SnapshotReadyBlock /> : <LoadingBlock />;
   if (safeError) return <ErrorBlock message={safeError} />;
-  if (mode === 'snapshot' && !data) return <SnapshotReadyBlock />;
+  // CRITICAL FIX: Always render UI, even in snapshot mode without data
+  // Remove blocking condition that was preventing dashboard from rendering
 
   // ── Main render ───────────────────────────────────────────────────────────
   return (
@@ -151,15 +190,18 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
       <div className="relative z-10 max-w-[1920px] mx-auto px-3 sm:px-5 lg:px-8 py-4 sm:py-6">
         <div className="dashboard-grid" style={{
           display: 'grid',
-          gridTemplateColumns: '1fr 1fr',
+          gridTemplateColumns: '1fr',
           gap: '20px'
         }}>
 
-        {/* ROW 1 — Ticker strip (full width) */}
+        {/* ROW 1 — Symbol Selector + Ticker strip (full width) */}
         <div className="full-width" style={{ gridColumn: '1 / -1' }}>
+          <div className="trading-panel mb-4">
+            <SymbolSelector />
+          </div>
           <div className="trading-panel">
             <TickerStrip
-              symbol={symbol}
+              symbol={currentSymbol}
               data={data}
               effectiveSpot={effectiveSpot}
               mode={mode}
@@ -197,14 +239,13 @@ export default function Dashboard({ initialSymbol = 'NIFTY' }: DashboardProps) {
           />
         </div>
 
-        
         {/* ROW 5 — OI Heatmap (full width horizontal scroll) */}
         <div className="full-width" style={{ gridColumn: '1 / -1' }}>
           <div className="trading-panel">
             <div id="oi-heatmap" className="rounded-2xl overflow-x-auto" style={CARD}>
               <div className="h-[1px] w-full" style={{ background: 'linear-gradient(90deg, transparent, rgba(245,158,11,0.40), transparent)' }} />
               <div className="p-4 sm:p-5 min-w-[800px]">
-                <MemoizedOIHeatmap symbol={symbol} />
+                <MemoizedOIHeatmap symbol={currentSymbol} />
               </div>
             </div>
           </div>

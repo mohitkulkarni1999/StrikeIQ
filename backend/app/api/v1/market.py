@@ -4,7 +4,7 @@ from typing import Dict, Any
 from ...services.market_data.market_dashboard_service import MarketDashboardService
 from ...models.database import get_db
 from ...core.config import settings
-from ...services.instrument_registry import get_instrument_registry
+from ...services.instrument_registry import get_instrument_registry, instrument_registry
 import logging
 from datetime import datetime
 
@@ -136,32 +136,24 @@ async def get_market_dashboard(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/expiries")
-async def get_market_expiries(symbol: str):
-    """Get available expiries for a symbol from InstrumentRegistry"""
+async def get_expiries(symbol: str):
+
     try:
-        logger.info(f"API request: Expiries for {symbol}")
-        
-        registry = get_instrument_registry()
-        
-        symbol = symbol.upper().strip()
-        
-        expiry_map = registry.options.get(symbol)
-        
-        if not expiry_map:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No expiries found for symbol {symbol}"
-            )
-        
-        expiries = sorted(str(e) for e in expiry_map.keys())
-        
-        return {
-            "status": "success",
-            "data": expiries
-        }
-        
-    except HTTPException:
-        raise
+
+        registry = instrument_registry
+
+        if not registry:
+            return []
+
+        expiries = registry.get_expiries(symbol)
+
+        if not expiries:
+            return []
+
+        return expiries
+
     except Exception as e:
-        logger.error(f"Error in expiries API: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+        print("EXPIRY API ERROR:", e)
+
+        return []

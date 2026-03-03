@@ -120,6 +120,18 @@ class PaperTradeEngine:
             True if successful, False otherwise
         """
         try:
+            # Get symbol ID from registry to prevent integer errors
+            from app.services.instrument_registry import get_instrument_registry
+            registry = get_instrument_registry()
+            
+            symbol = prediction.get('symbol', 'NIFTY')
+            symbol_id = registry.get_id(symbol) if hasattr(registry, 'get_id') else None
+            
+            # If we can't get symbol_id, use a default integer
+            if symbol_id is None:
+                symbol_id = 1  # Default NIFTY ID
+                logger.warning(f"Could not get symbol_id for {symbol}, using default {symbol_id}")
+            
             # Select strike price and option type
             strike_price, option_type = self.select_strike_price(
                 prediction['signal'], 
@@ -136,26 +148,24 @@ class PaperTradeEngine:
             # Insert paper trade
             query = """
                 INSERT INTO paper_trade_log 
-                (prediction_id, symbol, strike_price, option_type, entry_price, quantity, trade_status)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (prediction_id, symbol, strike_price, entry_price, quantity)
+                VALUES (%s, %s, %s, %s, %s)
                 RETURNING id
             """
             
             params = (
                 prediction['id'],
-                "NIFTY",  # Default symbol
+                symbol,
                 strike_price,
-                option_type,
                 entry_price,
-                self.default_quantity,
-                "OPEN"
+                self.default_quantity
             )
             
             result = self.db.fetch_one(query, params)
             
             if result:
                 trade_id = result[0]
-                logger.info(f"Paper trade created: ID {trade_id}, {option_type} {strike_price} @ {entry_price}")
+                logger.debug(f"Paper trade created: ID {trade_id}, {option_type} {strike_price} @ {entry_price}")
                 
                 # Log AI event
                 self.log_ai_event(
@@ -182,6 +192,7 @@ class PaperTradeEngine:
                 WHERE trade_status = 'OPEN'
                 AND entry_time <= NOW() - INTERVAL '5 minutes'
                 ORDER BY entry_time ASC
+                LIMIT 100
             """
             
             results = self.db.fetch_query(query)
@@ -199,7 +210,7 @@ class PaperTradeEngine:
                     'entry_time': row[7]
                 })
                 
-            logger.info(f"Found {len(open_trades)} open trades to monitor")
+            logger.debug(f"Found {len(open_trades)} open trades to monitor")
             return open_trades
             
         except Exception as e:
@@ -241,7 +252,7 @@ class PaperTradeEngine:
             success = self.db.execute_query(query, params)
             
             if success:
-                logger.info(f"Paper trade closed: ID {trade['id']}, PnL: {pnl:.2f}")
+                logger.debug(f"Paper trade closed: ID {trade['id']}, PnL: {pnl:.2f}")
                 
                 # Log AI event
                 self.log_ai_event(
@@ -282,7 +293,7 @@ class PaperTradeEngine:
                     if self.exit_paper_trade(trade):
                         trades_closed += 1
             
-            logger.info(f"Trade monitoring completed. Closed {trades_closed} trades")
+            logger.debug(f"Trade monitoring completed. Closed {trades_closed} trades")
             return trades_closed
             
         except Exception as e:
@@ -304,7 +315,7 @@ class PaperTradeEngine:
                 if self.create_paper_trade(prediction):
                     trades_created += 1
             
-            logger.info(f"New prediction processing completed. Created {trades_created} paper trades")
+            logger.debug(f"New prediction processing completed. Created {trades_created} paper trades")
             return trades_created
             
         except Exception as e:

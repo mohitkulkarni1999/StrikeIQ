@@ -326,6 +326,30 @@ class LiveOptionChainBuilder:
         self._rebuild_in_progress = False
         
         # Load cached instruments at startup
+
+    def build(self, symbol: str):
+        """
+        Build option chain for symbol
+        """
+        from app.services.instrument_registry import get_instrument_registry
+        registry = get_instrument_registry()
+        
+        expiries = registry.get_expiries(symbol)
+        
+        if not expiries:
+            return {
+                "symbol": symbol,
+                "chain": [],
+                "expiry": None
+            }
+        
+        expiry = expiries[0]
+        
+        return {
+            "symbol": symbol,
+            "expiry": expiry,
+            "chain": []
+        }
        
 
     async def start(self) -> None:
@@ -1704,15 +1728,20 @@ class LiveOptionChainBuilder:
             print(f"📡 WS BROADCAST SENT for {self.symbol}")
 
         except Exception as e:
-            logger.error(f"Broadcast failed for {self.symbol}: {e}")
+            pass
+
 
 # Global instance
 _builder_instances: Dict[str, LiveOptionChainBuilder] = {}
 
-def get_live_chain_builder(symbol: str, expiry: date) -> LiveOptionChainBuilder:
+
+def get_expiries(symbol: str):
+    registry = get_instrument_registry()
+    return registry.get_expiries(symbol)
+
+
+def get_live_chain_builder(symbol: str, expiry: str) -> LiveOptionChainBuilder:
     key = f"{symbol}:{expiry}"
     if key not in _builder_instances:
         _builder_instances[key] = LiveOptionChainBuilder(symbol, expiry)
     return _builder_instances[key]
-
-

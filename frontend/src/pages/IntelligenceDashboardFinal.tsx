@@ -1,5 +1,4 @@
 import React, { useState, useEffect } from 'react';
-import api from '../lib/api';
 import StructuralBanner from '../components/intelligence/StructuralBannerFinal';
 import ConvictionPanel from '../components/intelligence/ConvictionPanelFinal';
 import GammaPressurePanel from '../components/intelligence/GammaPressurePanelFinal';
@@ -9,47 +8,24 @@ import RegimeDynamicsPanel from '../components/intelligence/RegimeDynamicsPanelF
 import ExpiryPanel from '../components/intelligence/ExpiryPanelFinal';
 import { MarketDataDisplay } from '../components/MarketDataDisplay';
 import { useLiveMarketData } from '../hooks/useLiveMarketData';
-// import IOHeatmap from '../components/IOHeatmap'; // Existing component - uncomment when path is correct
-
-interface WebSocketData {
-  status: string;
-  symbol: string;
-  spot: number;
-  expected_move: number;
-  net_gamma: number;
-  gamma_flip_level: number;
-  distance_from_flip: number;
-  call_oi_velocity: number;
-  put_oi_velocity: number;
-  flow_imbalance: number;
-  flow_direction: string;
-  structural_regime: string;
-  regime_confidence: number;
-  regime_stability: number;
-  acceleration_index: number;
-  pin_probability: number;
-  alerts: any[];
-  gamma_pressure_map: any;
-  flow_gamma_interaction: any;
-  regime_dynamics: any;
-  expiry_magnet_analysis: any;
-}
 
 const IntelligenceDashboard: React.FC = () => {
-  // Use REST-based market data hook instead of WebSocket
-  const marketData = useLiveMarketData('NIFTY', null);
-  
-  const [regimeHistory, setRegimeHistory] = useState<string[]>([]);
-  
+  // Use the optimized market data hook
+  const { data: marketData, connected: isConnected, loading, error } = useLiveMarketData('NIFTY', null);
+
+  const [regimeHistory, setRegimeHistory] = useState<any[]>([]);
+
   useEffect(() => {
     // Update regime history when market data changes
-    if (marketData.data && marketData.data.intelligence) {
-      setRegimeHistory(prev => [...prev, marketData.data.intelligence]);
+    if (marketData?.intelligence) {
+      setRegimeHistory(prev => [...prev, marketData.intelligence]);
     }
-  }, [marketData.data]);
-  
+  }, [marketData]);
+
+  const wsData = marketData?.intelligence as any;
+
   // Loading state
-  if (marketData.loading) {
+  if (loading) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
@@ -59,85 +35,82 @@ const IntelligenceDashboard: React.FC = () => {
       </div>
     );
   }
-  
+
   // Error state
-  if (marketData.error) {
+  if (error) {
     return (
       <div className="min-h-screen bg-black text-white flex items-center justify-center">
         <div className="text-center">
-          <div className="w-16 h-16 border-4 border-gray-700 rounded-full mb-4">
-            <div className="text-red-500 text-xl mb-2">⚠️ Error</div>
-            <div className="text-gray-300">{marketData.error}</div>
-          </div>
+          <div className="text-red-500 text-xl mb-2">⚠️ Error</div>
+          <div className="text-gray-300">{error}</div>
         </div>
       </div>
     );
   }
-  
-  // Success state with data
+
   return (
     <div className="min-h-screen bg-black text-white">
       {/* STRUCTURAL REGIME BANNER (FULL WIDTH) */}
       <div className="p-6 pb-0">
         <StructuralBanner
-          regime={marketData.data?.intelligence?.structural_regime || 'unknown'}
-          confidence={marketData.data?.intelligence?.regime_confidence || 0}
-          stability={marketData.data?.intelligence?.regime_stability || 0}
-          acceleration={marketData.data?.intelligence?.acceleration_index || 0}
+          regime={wsData?.structural_regime || 'unknown'}
+          confidence={wsData?.regime_confidence || 0}
+          stability={wsData?.regime_stability || 0}
+          acceleration={wsData?.acceleration_index || 0}
         />
       </div>
-      
+
       {/* INTELLIGENCE SCORE CARDS */}
-      <div className="px-6 pb-6">
+      <div className="px-6 pb-6 mt-6">
         <div className="grid grid-cols-12 gap-6">
-          {/* Market Data Display - Test Component */}
+          {/* Market Data Display */}
           <div className="col-span-12">
             <MarketDataDisplay />
           </div>
-          
+
           {/* Conviction Panel */}
-          <div className="col-span-8">
-            <ConvictionPanel conviction={marketData.data?.intelligence?.conviction || 0} />
+          <div className="col-span-12 lg:col-span-8">
+            <ConvictionPanel
+              conviction={wsData?.conviction || 0}
+              directionalPressure={wsData?.flow_imbalance ? wsData.flow_imbalance * 100 : 0}
+              instabilityIndex={wsData?.regime_dynamics?.transition_probability || 0}
+            />
           </div>
-          
+
           {/* Main Intelligence Display */}
-          <div className="col-span-4">
+          <div className="col-span-12 lg:col-span-4">
             <div className="bg-white/10 backdrop-blur-sm rounded-lg border border-gray-700 p-6">
-              <div className="text-2xl font-bold text-center mb-4">
-                StrikeIQ Intelligence Engine
+              <div className="text-2xl font-bold text-center mb-4 text-[#00E5FF]">
+                StrikeIQ Intelligence
               </div>
-              <div className="text-gray-600 text-center mb-6">
-                Analyzing market patterns in real-time
+              <div className="text-gray-400 text-center mb-6 text-sm">
+                Real-time algorithmic market analysis
               </div>
-              
-              {/* Display market data when available */}
-              {marketData.data && (
+
+              {marketData && (
                 <div className="space-y-4">
                   <div className="text-center">
-                    <div className="text-3xl font-bold text-green-400">
-                      NIFTY
+                    <div className="text-3xl font-bold text-blue-400">
+                      {marketData.symbol}
                     </div>
-                    <div className="text-5xl font-bold text-gray-300">
-                      {marketData.data.spot?.toLocaleString()}
-                    </div>
-                    <div className="text-lg text-gray-400">
-                      Change: {marketData.data.change?.toFixed(2)}%
+                    <div className="text-5xl font-black text-white my-2 tracking-tighter">
+                      {marketData.spot?.toLocaleString()}
                     </div>
                   </div>
-                  
+
                   {/* Key Intelligence Metrics */}
                   <div className="grid grid-cols-2 gap-4 mt-6">
-                    <div className="text-center">
-                      <div className="text-lg font-semibold text-gray-400">Market Bias</div>
-                      <div className="text-2xl font-bold">
-                        {marketData.data.intelligence?.market_bias || 'NEUTRAL'}
+                    <div className="text-center p-3 bg-white/5 rounded-xl">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Market Bias</div>
+                      <div className="text-xl font-bold text-white">
+                        {wsData?.market_bias || 'NEUTRAL'}
                       </div>
                     </div>
-                    
-                    <div className="text-center">
-                      <div className="text-lg font-semibold text-gray-400">Pin Probability</div>
-                      <div className="text-2xl font-bold">
-                        {(marketData.data.intelligence?.pin_probability * 100)?.toFixed(1)}%
+
+                    <div className="text-center p-3 bg-white/5 rounded-xl">
+                      <div className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Pin Prob.</div>
+                      <div className="text-xl font-bold text-[#00FF9F]">
+                        {((wsData?.pin_probability || 0) * 100).toFixed(1)}%
                       </div>
                     </div>
                   </div>
@@ -145,50 +118,49 @@ const IntelligenceDashboard: React.FC = () => {
               )}
             </div>
           </div>
-          
-          {/* Other Panels */}
-          <div className="col-span-4">
-            <GammaPressurePanel 
-              pressureMap={marketData.data?.intelligence?.gamma_pressure_map || {}}
-              spot={marketData.data.spot || 0}
+
+          {/* Analysis Panels Grid */}
+          <div className="col-span-12 lg:col-span-4">
+            <GammaPressurePanel
+              pressureMap={wsData?.gamma_pressure_map || {}}
+              spot={marketData?.spot || 0}
             />
           </div>
-          
-          <div className="col-span-4">
-            <AlertPanel 
-              alerts={marketData.data?.intelligence?.alerts || []}
+
+          <div className="col-span-12 lg:col-span-4">
+            <AlertPanel
+              alerts={wsData?.alerts || []}
               maxVisible={5}
             />
           </div>
-          
-          <div className="col-span-4">
-            <InteractionPanel 
-              interaction={marketData.data?.intelligence?.flow_gamma_interaction || {}}
+
+          <div className="col-span-12 lg:col-span-4">
+            <InteractionPanel
+              interaction={wsData?.flow_gamma_interaction || {}}
             />
           </div>
-          
-          <div className="col-span-4">
-            <RegimeDynamicsPanel 
-              dynamics={marketData.data?.intelligence?.regime_dynamics || {}}
+
+          <div className="col-span-12 lg:col-span-6">
+            <RegimeDynamicsPanel
+              dynamics={wsData?.regime_dynamics || {}}
             />
           </div>
-          
-          <div className="col-span-4">
-            <ExpiryPanel 
-              expiryAnalysis={marketData.data?.intelligence?.expiry_magnet_analysis || {}}
+
+          <div className="col-span-12 lg:col-span-6">
+            <ExpiryPanel
+              expiryAnalysis={wsData?.expiry_magnet_analysis || {}}
             />
           </div>
         </div>
       </div>
-      
+
       {/* Connection Status */}
       <div className="fixed bottom-4 right-4 z-50">
-        <div className={`px-3 py-2 rounded-full text-xs font-medium backdrop-blur-sm ${
-          marketData.isConnected 
-            ? 'bg-green-500/20 border border-green-500/40 text-green-400' 
-            : 'bg-red-500/20 border border-red-500/40 text-red-400'
-        }`}>
-          {marketData.isConnected ? '🟢 LIVE' : '🔴 OFFLINE'}
+        <div className={`px-3 py-2 rounded-full text-xs font-medium border backdrop-blur-sm ${isConnected
+          ? 'bg-green-500/10 border-green-500/40 text-green-400'
+          : 'bg-red-500/10 border-red-500/40 text-red-400'
+          }`}>
+          {isConnected ? '🟢 LIVE' : '🔴 OFFLINE'}
         </div>
       </div>
     </div>

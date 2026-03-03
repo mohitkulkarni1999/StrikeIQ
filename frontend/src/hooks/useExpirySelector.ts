@@ -1,56 +1,46 @@
-import { useState, useEffect } from 'react';
+/**
+ * useExpirySelector - FINAL PRODUCTION STABILITY PATCH
+ * Fetches expiries ONLY when symbol changes from store.
+ * Prevents API spam with ref guard and strict dependency array.
+ */
+
+import { useState, useEffect, useRef } from 'react';
 import { fetchAvailableExpiries } from '@/api/marketApi';
+import { useMarketStore } from '@/stores/marketStore';
 import { useOptionChainStore } from '@/core/ws/optionChainStore';
 
-export const useExpirySelector = (symbol: string) => {
+export const useExpirySelector = () => {
   const [expiryList, setExpiryList] = useState<string[]>([]);
   const [selectedExpiry, setSelectedExpiry] = useState<string | null>(null);
   const [loadingExpiries, setLoadingExpiries] = useState(false);
   const [expiryError, setExpiryError] = useState<string | null>(null);
 
-  const { connectOptionChain, disconnectOptionChain, optionChainConnected } = useOptionChainStore();
+  // Read symbol from store - no props needed
+  const currentSymbol = useMarketStore(state => state.currentSymbol);
+  const { optionChainConnected } = useOptionChainStore();
 
-  // Fetch available expiries when symbol changes
+  const lastFetchedSymbolRef = useRef<string | null>(null)
+
   useEffect(() => {
-    const loadExpiries = async () => {
-      if (!symbol) return;
 
-      setLoadingExpiries(true);
-      setExpiryError(null);
+    async function loadExpiries() {
 
-      try {
-        const expiries = await fetchAvailableExpiries(symbol);
-        setExpiryList(expiries);
-
-        // Auto-select the nearest expiry if none is selected
-        if (expiries.length > 0 && !selectedExpiry) {
-          setSelectedExpiry(expiries[0]);
-        }
-      } catch (error) {
-        setExpiryError('Failed to load expiries');
-        console.error('Error loading expiries:', error);
-      } finally {
-        setLoadingExpiries(false);
+      if (lastFetchedSymbolRef.current === currentSymbol) {
+        return
       }
-    };
 
-    loadExpiries();
-  }, [symbol]);
+      const res = await fetch(`/api/v1/market/expiries?symbol=${currentSymbol}`)
 
-  // Handle expiry change - reconnect option chain WebSocket
-  useEffect(() => {
-    if (symbol && selectedExpiry) {
-      // Disconnect existing connection
-      disconnectOptionChain();
-      
-      // Small delay to ensure clean disconnection
-      const timeoutId = setTimeout(() => {
-        connectOptionChain(symbol, selectedExpiry);
-      }, 100);
+      const data = await res.json()
 
-      return () => clearTimeout(timeoutId);
+      setExpiryList(data)
+
+      lastFetchedSymbolRef.current = currentSymbol
     }
-  }, [symbol, selectedExpiry, connectOptionChain, disconnectOptionChain]);
+
+    loadExpiries()
+
+  }, [currentSymbol])
 
   const handleExpiryChange = (expiry: string) => {
     setSelectedExpiry(expiry);
@@ -62,6 +52,7 @@ export const useExpirySelector = (symbol: string) => {
     loadingExpiries,
     expiryError,
     handleExpiryChange,
-    optionChainConnected
+    optionChainConnected,
+    currentSymbol
   };
 };
