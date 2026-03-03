@@ -335,10 +335,16 @@ class WebSocketMarketFeed:
                                 
                                 if now - self._last_ai_update > 1:
                                     chain_copy = copy.deepcopy(chain_manager.chain)
-                                    await self.ai_engine.update_market_state({
-                                        "spot": spot,
-                                        "chain": chain_copy
-                                    })
+                                    
+                                    # Prevent AI engine crash with empty chain
+                                    if chain_copy:
+                                        await self.ai_engine.update_market_state({
+                                            "spot": spot,
+                                            "chain": chain_copy
+                                        })
+                                    else:
+                                        logger.warning("AI ENGINE SKIPPED: empty option chain")
+                                    
                                     self._last_ai_update = now
 
                     # OPTION DETECTION - Use CE/PE pattern for reliability

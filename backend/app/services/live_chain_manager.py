@@ -85,15 +85,24 @@ class LiveChainManager:
                 "iv": tick.get("iv")
             }
 
-            # Cache chain in Redis
+            # Cache chain in Redis (throttled to prevent Redis storm)
             try:
                 import json
+                import time
                 from app.core.redis_client import redis_client
-                redis_client.set(
-                    "strikeiq:option_chain",
-                    json.dumps(self.chain, default=float),
-                    ex=300  # 5 minutes TTL
-                )
+                
+                # Throttle Redis writes to once per second
+                if not hasattr(self, "_last_redis_write"):
+                    self._last_redis_write = 0
+                
+                now = time.time()
+                if now - self._last_redis_write > 1:
+                    redis_client.set(
+                        "strikeiq:option_chain",
+                        json.dumps(self.chain, default=float),
+                        ex=300  # 5 minutes TTL
+                    )
+                    self._last_redis_write = now
             except Exception:
                 pass  # Redis is optional
 
