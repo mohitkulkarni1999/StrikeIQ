@@ -3,7 +3,6 @@ import json
 import logging
 from typing import Optional
 from datetime import datetime
-from collections import deque
 
 import httpx
 import websockets
@@ -11,7 +10,8 @@ from fastapi import HTTPException
 
 from app.services.token_manager import token_manager
 from app.services.market_session_manager import get_market_session_manager
-from app.services.upstox_protobuf_parser import decode_protobuf_message, extract_index_price
+from app.services.upstox_protobuf_parser_v3 import decode_protobuf_message, extract_index_price
+from app.proto.MarketDataFeed_pb2 import FeedResponse
 from app.core.live_market_state import MarketStateManager
 from app.services.live_chain_manager import chain_manager
 from app.core.ws_manager import manager
@@ -24,14 +24,33 @@ logger = logging.getLogger(__name__)
 last_market_status = None
 
 
+def get_index_instrument_keys():
+    with open("app/data/NSE.json", "r") as f:
+        instruments = json.load(f)
+    
+    keys = []
+    
+    for item in instruments:
+        
+        if item.get("segment") == "NSE_INDEX":
+            
+            symbol = item.get("trading_symbol")
+            
+            if symbol in ["NIFTY 50", "NIFTY BANK"]:
+                
+                keys.append(item.get("instrument_key"))
+    
+    return keys
+
+
 def resolve_symbol_from_instrument(instrument_key: str):
     if not instrument_key:
         return None
 
-    if instrument_key == "NSE_INDEX|Nifty 50":
+    if instrument_key == "NSE_INDEX|NIFTY 50":
         return "NIFTY"
 
-    if instrument_key == "NSE_INDEX|Nifty Bank":
+    if instrument_key == "NSE_INDEX|NIFTY BANK":
         return "BANKNIFTY"
 
     if "BANKNIFTY" in instrument_key:
@@ -65,8 +84,9 @@ class WebSocketMarketFeed:
         self.running = False
         self._connecting = False
         self._reconnecting = False
+        self._subscription_sent = False
 
-        self._message_queue = deque(maxlen=500)  # Reduced from 2000 to prevent memory bloat
+        self._message_queue = asyncio.Queue()
 
         self._recv_task: Optional[asyncio.Task] = None
         self._process_task: Optional[asyncio.Task] = None
@@ -152,6 +172,9 @@ class WebSocketMarketFeed:
         self.is_connected = True
         
         logger.info("🟢 UPSTOX WS CONNECTED")
+        logger.info("WS STATE → CONNECTED")
+        logger.info("READY TO SEND SUBSCRIPTION")
+        
         await self.subscribe_indices()
 
     async def connect(self):
@@ -198,31 +221,18 @@ class WebSocketMarketFeed:
             await instrument_registry.wait_until_ready()
 
             # ------------------------------------------------
-            # Get NIFTY option instruments
+            # TEST MINIMAL SUBSCRIPTION FIRST (STEP 4)
             # ------------------------------------------------
-
-            all_options = instrument_registry.get_option_instruments("NIFTY")
-
-            if not all_options:
-                logger.warning("⚠️ No option instruments found in registry")
-                return
-
-            # Prevent subscription overload
-            limited_options = all_options[:40]
-
-            # ------------------------------------------------
-            # Build instrument list
-            # ------------------------------------------------
-
+            
             instrument_keys = [
-                "NSE_INDEX|Nifty 50",
-                "NSE_INDEX|Nifty Bank"
+                "NSE_INDEX|NIFTY 50",
+                "NSE_INDEX|NIFTY BANK",
+                "NSE_EQ|INE009A01021"
             ]
-
-            instrument_keys.extend(limited_options)
-
-            # Remove duplicates just in case
-            instrument_keys = list(set(instrument_keys))
+            
+            logger.info("INSTRUMENT KEYS (CORRECTED):")
+            for k in instrument_keys:
+                logger.info(k)
 
             # ------------------------------------------------
             # Subscription payload
@@ -232,11 +242,13 @@ class WebSocketMarketFeed:
                 "guid": "strikeiq-feed",
                 "method": "sub",
                 "data": {
-                    "mode": "full",   # REQUIRED for options + index feeds
+                    "mode": "ltpc",
                     "instrumentKeys": instrument_keys
                 }
             }
 
+            logger.info("SUBSCRIPTION PAYLOAD:")
+            logger.info(json.dumps(payload, indent=2))
             logger.info(f"UPSTOX SUBSCRIPTION PAYLOAD={len(instrument_keys)} instruments")
 
             if self.websocket is None:
@@ -245,7 +257,7 @@ class WebSocketMarketFeed:
 
             await self.websocket.send(json.dumps(payload))
 
-            logger.info("📡 INDICES + OPTIONS SUBSCRIBED")
+            logger.info("📡 MINIMAL INDICES SUBSCRIPTION SENT")
 
         except Exception as e:
 
@@ -279,118 +291,96 @@ class WebSocketMarketFeed:
             await asyncio.sleep(10)
 
     async def _recv_loop(self):
-        """Receive messages from Upstox WebSocket and enqueue for processing.
-        
-        ARCHITECTURE: _recv_loop receives raw bytes and puts them into
-        _message_queue. _process_loop reads from the queue, decodes protobuf,
-        and broadcasts to frontend clients.
-        """
+
         while self.running:
+
             try:
-                if self.websocket is None:
-                    logger.debug("WS connection missing")
+
+                if not self.websocket:
                     await asyncio.sleep(1)
                     continue
-                
-                async for message in self.websocket:
+
+                raw = await self.websocket.recv()
+                logger.info("WS FRAME RECEIVED")
+
+                if not raw:
+                    continue
+
+                # STEP 2: Add control message detection
+                if isinstance(raw, str):
+                    logger.info(f"WS CONTROL MESSAGE: {raw}")
                     try:
-                        logger.info(f"UPSTOX RAW MESSAGE TYPE={type(message)} SIZE={len(message)}")
-                        
-                        if isinstance(message, bytes):
-                            logger.info("UPSTOX RAW MESSAGE RECEIVED")
-                            logger.info(f"UPSTOX RAW BYTES SIZE={len(message)}")
-                            
-                            # Enqueue for processing by _process_loop
-                            self._message_queue.append(message)
-                            
-                        else:
-                            # Ensure message is bytes
-                            if isinstance(message, str):
-                                message = message.encode()
-                                
-                            # Handle any JSON messages (unlikely with V3)
-                            try:
-                                data = json.loads(message)
-                                
-                                # Skip heartbeat messages
-                                if data.get("type") == "heartbeat":
-                                    continue
-                                
-                                # Broadcast market data directly for JSON
-                                await manager.broadcast(data)
-                                logger.info("WS BROADCAST SENT (JSON)")
-                                
-                            except json.JSONDecodeError:
-                                logger.debug("Failed to parse JSON message")
-                    
+                        import json
+                        msg = json.loads(raw)
+
+                        if "type" in msg:
+                            logger.info(f"WS CONTROL TYPE: {msg['type']}")
+
+                        if "market_status" in msg:
+                            logger.info(f"MARKET STATUS: {msg['market_status']}")
+
                     except Exception as e:
-                        logger.error(f"Message processing error: {e}")
-                
+                        logger.warning(f"CONTROL MESSAGE PARSE ERROR: {e}")
+
+                    continue
+
+                # STEP 3: Binary frame handling
+                if not isinstance(raw, (bytes, bytearray)):
+                    logger.warning(f"UNKNOWN FRAME TYPE: {type(raw)}")
+                    continue
+
+                packet_size = len(raw)
+                logger.info(f"RAW PACKET SIZE = {packet_size}")
+
+                # STEP 4: Keep packet logging
+                if packet_size < 200:
+                    logger.info(f"HEARTBEAT PACKET SIZE={packet_size}")
+                    continue
+
+                # STEP 8: Market Packet Detection
+                logger.info(f"MARKET DATA PACKET SIZE={packet_size}")
+
+                ticks = decode_protobuf_message(raw)
+
+                if ticks:
+                    logger.info(f"PUSHING {len(ticks)} TICKS INTO QUEUE")
+                    await self._message_queue.put(ticks)
+
+                else:
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        logger.debug("Non protobuf message ignored")
+
             except Exception as e:
-                logger.error(f"Recv error → reconnecting: {e}")
+
+                logger.error(f"WebSocket recv error: {e}")
+
                 await self._handle_disconnect()
+
                 break
 
     async def _process_loop(self):
         """Process queued binary messages: decode protobuf → extract ticks → broadcast."""
 
+        logger.info("PROCESS LOOP STARTED")
+
         while self.running:
 
             try:
 
-                if self._message_queue:
-                    raw = self._message_queue.popleft()
-                else:
-                    await asyncio.sleep(0.001)
-                    continue
-
-                # Decode protobuf in thread to avoid blocking event loop
-                ticks = await asyncio.to_thread(decode_protobuf_message, raw)
-
-                logger.info(f"PROTOBUF MESSAGE RECEIVED | TICKS={len(ticks)}")
-
-                if not ticks:
-                    continue
-
-                for tick in ticks:
-
-                    if tick.get("type") == "market_status":
-
-                        status = tick.get("status")
-
-                        global last_market_status
-
-                        if status != last_market_status:
-
-                            last_market_status = status
-
-                            logger.warning(f"🚫 MARKET {status.upper()}")
-
-                            await manager.broadcast(tick)
-
-                        continue
-
-                    # FIX 3: Broadcast NIFTY spot price
-                    if "NSE_INDEX|Nifty 50" in tick.get("instrument", ""):
-
-                        spot_tick = {
-                            "type": "spot_tick",
-                            "symbol": "NIFTY",
-                            "spot": tick.get("ltp", 0)
-                        }
-                        await manager.broadcast(spot_tick)
-                        logger.info(f"📡 BROADCAST → spot_tick NIFTY={tick.get('ltp', 0)}")
-
-                    logger.info(f"📡 BROADCAST → {tick.get('type')} {tick.get('instrument')} LTP={tick.get('ltp')}")
-
-                    # FIX 2: Ensure ticks broadcast to frontend
-                    await manager.broadcast(tick)
+                ticks = await self._message_queue.get()
+                logger.info("PROCESSING TICK FROM QUEUE")
+                
+                await self.broadcast_ticks(ticks)
 
             except Exception as e:
 
                 logger.error(f"Process error: {e}")
 
     async def _handle_disconnect(self):
+        """Handle WebSocket disconnect with automatic reconnect and resubscribe (STEP 8)"""
+        logger.warning("🔌 WebSocket disconnected - attempting reconnect")
         self.is_connected = False
         self._reconnecting = False
 
@@ -401,7 +391,21 @@ class WebSocketMarketFeed:
             pass
 
         await self._cancel_tasks()
+        
+        # Wait before reconnecting
         await asyncio.sleep(5)
+        
+        # Attempt to reconnect and resubscribe
+        if self.running:
+            try:
+                logger.info("🔄 Attempting to reconnect...")
+                success = await self.ensure_connection()
+                if success:
+                    logger.info("✅ Reconnected successfully")
+                else:
+                    logger.error("❌ Reconnection failed")
+            except Exception as e:
+                logger.error(f"Reconnection error: {e}")
 
     async def disconnect(self):
 
@@ -444,6 +448,12 @@ class WebSocketMarketFeed:
             except Exception as e:
 
                 logger.error(f"Tick routing failed for {key}: {e}")
+
+    async def broadcast_ticks(self, ticks):
+        """Broadcast ticks to frontend"""
+        for tick in ticks:
+            logger.info("BROADCASTING TICK TO FRONTEND")
+            await manager.broadcast(tick)
 
 
 class WebSocketFeedManager:
