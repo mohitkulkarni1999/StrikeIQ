@@ -55,23 +55,39 @@ class WSManager:
 
 
     async def broadcast(self, message):
-
+        """Broadcast message to all connected clients concurrently"""
         async with self.broadcast_lock:
+            if not self.connections:
+                return  # No connections to broadcast to
 
+            # Create list of send tasks
+            send_tasks = []
             dead_connections = []
 
-            for connection in list(self.connections):
+            for connection in self.connections:
+                send_tasks.append(
+                    self._send_with_error_handling(connection, message, dead_connections)
+                )
 
-                try:
-                    await connection.send_json(message)
+            # Execute all sends concurrently
+            if send_tasks:
+                await asyncio.gather(*send_tasks, return_exceptions=True)
 
-                except Exception:
-
-                    dead_connections.append(connection)
-
+            # Remove dead connections
             for conn in dead_connections:
                 if conn in self.connections:
                     self.connections.remove(conn)
+
+            if dead_connections:
+                logger.info(f"Removed {len(dead_connections)} dead connections")
+
+    async def _send_with_error_handling(self, connection, message, dead_connections):
+        """Send message to a single connection with error handling"""
+        try:
+            await connection.send_json(message)
+        except Exception as e:
+            dead_connections.append(connection)
+            logger.debug(f"Failed to send to connection: {e}")
 
 
 # singleton instance

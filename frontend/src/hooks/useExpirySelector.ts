@@ -8,6 +8,7 @@ import { useState, useEffect, useRef } from 'react';
 import { fetchAvailableExpiries } from '@/api/marketApi';
 import { useMarketStore } from '@/stores/marketStore';
 import { useOptionChainStore } from '@/core/ws/optionChainStore';
+import { uiLog } from '@/utils/uiLogger';
 
 export const useExpirySelector = () => {
   const [expiryList, setExpiryList] = useState<string[]>([]);
@@ -15,11 +16,28 @@ export const useExpirySelector = () => {
   const [loadingExpiries, setLoadingExpiries] = useState(false);
   const [expiryError, setExpiryError] = useState<string | null>(null);
 
+  // Render loop detection
+  const renderCountRef = useRef(0)
+  renderCountRef.current++
+  
+  if (renderCountRef.current > 20) {
+    console.warn("⚠️ EXCESSIVE RENDER DETECTED in useExpirySelector", {
+      renderCount: renderCountRef.current
+    })
+  }
+
   // Read symbol from store - no props needed
   const currentSymbol = useMarketStore(state => state.currentSymbol);
   const { optionChainConnected } = useOptionChainStore();
 
   const lastFetchedSymbolRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    uiLog("COMPONENT MOUNTED", "useExpirySelector")
+    return () => {
+      uiLog("COMPONENT UNMOUNTED", "useExpirySelector")
+    }
+  }, [])
 
   useEffect(() => {
 

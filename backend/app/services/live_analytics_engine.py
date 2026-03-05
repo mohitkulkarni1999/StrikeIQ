@@ -5,12 +5,14 @@ Reuses existing calculation logic with live data source.
 
 import asyncio
 import logging
+import time
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass
 
 from ..engines.probability_engine import ProbabilityEngine
 from .intelligence_aggregator import IntelligenceAggregator
+from app.core.logging_config import TICK_DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,10 @@ class LiveAnalyticsEngine:
             calls = market_data.get("calls", [])
             puts = market_data.get("puts", [])
             
+            # STEP 3: LOG TICK DETAILS - DEBUG ONLY
+            if TICK_DEBUG:
+                logger.info(f"ANALYTICS INPUT → {symbol} | {spot_price}")
+            
             # Create live market state
             market_state = LiveMarketState(
                 symbol=symbol,
@@ -99,6 +105,10 @@ class LiveAnalyticsEngine:
     async def _calculate_live_metrics(self, symbol: str, market_state: LiveMarketState):
         """Calculate live metrics using existing engines"""
         try:
+            # STEP 7: PERFORMANCE TRACE - DEBUG ONLY
+            if TICK_DEBUG:
+                start = time.time()
+            
             # Reuse existing analytics calculation logic
             # This mirrors option_chain_service.py calculations
             
@@ -183,6 +193,14 @@ class LiveAnalyticsEngine:
                 "last_update": market_state.last_update.isoformat()
             }
             
+            # STEP 3: ANALYTICS CALCULATION COMPLETE - DEBUG ONLY
+            if TICK_DEBUG:
+                logger.info("ANALYTICS CALCULATION COMPLETE")
+            
+            # STEP 7: PROCESSING LATENCY - DEBUG ONLY
+            if TICK_DEBUG:
+                logger.info(f"PROCESSING LATENCY = {time.time() - start}")
+            
             logger.info(f"Calculated live metrics for {symbol}: bias={bias_label} ({bias_score}), pcr={pcr}")
             
         except Exception as e:
@@ -194,7 +212,8 @@ class LiveAnalyticsEngine:
     
     async def _update_loop(self):
         """Main update loop for live processing"""
-        logger.info("LiveAnalyticsEngine update loop started")
+        # STEP 3: ANALYTICS ENGINE LOOP START - OUTSIDE LOOP
+        logger.info("ANALYTICS ENGINE STARTED")
         
         while self.running:
             try:

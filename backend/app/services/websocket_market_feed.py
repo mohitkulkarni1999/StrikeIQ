@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import time
 from typing import Optional
 from datetime import datetime
 
@@ -8,18 +9,35 @@ import httpx
 import websockets
 from fastapi import HTTPException
 
+# Month mapping for expiry parsing
+MONTH_MAP = {
+    "JAN":1,"FEB":2,"MAR":3,"APR":4,
+    "MAY":5,"JUN":6,"JUL":7,"AUG":8,
+    "SEP":9,"OCT":10,"NOV":11,"DEC":12
+}
+
 from app.services.token_manager import token_manager
 from app.services.market_session_manager import get_market_session_manager
 from app.services.upstox_protobuf_parser_v3 import decode_protobuf_message, extract_index_price
-from app.proto.MarketDataFeed_pb2 import FeedResponse
+from app.proto.MarketDataFeedV3_pb2 import FeedResponse
 from app.core.live_market_state import MarketStateManager
 from app.services.live_chain_manager import chain_manager
 from app.core.ws_manager import manager
 from app.services.instrument_registry import get_instrument_registry
 from app.services.live_structural_engine import LiveStructuralEngine
 from app.core.live_market_state import get_market_state_manager
+from app.core.logging_config import TICK_DEBUG
+
+# Import new components
+from app.services.message_router import message_router
+from app.services.option_chain_builder import option_chain_builder
+from app.services.oi_heatmap_engine import oi_heatmap_engine
+from app.services.analytics_broadcaster import analytics_broadcaster
 
 logger = logging.getLogger(__name__)
+
+# Tick log throttling
+_last_tick_log = 0
 
 last_market_status = None
 
@@ -94,6 +112,12 @@ class WebSocketMarketFeed:
         self._heartbeat_task: Optional[asyncio.Task] = None
 
         self._client = httpx.AsyncClient(timeout=30)
+        
+        # Option subscription tracking
+        self.current_atm = None
+        self.current_expiry = None
+        self.current_option_keys = []
+        self.instrument_registry = None
 
     async def start(self):
 
@@ -101,6 +125,11 @@ class WebSocketMarketFeed:
             return
 
         self.running = True
+
+        # Start new components
+        await option_chain_builder.start()
+        await oi_heatmap_engine.start()
+        await analytics_broadcaster.start()
 
         # Try to connect, but don't fail if authentication fails
         success = await self.ensure_connection()
@@ -214,65 +243,196 @@ class WebSocketMarketFeed:
 
     async def subscribe_indices(self):
         """
-        Subscribe to NIFTY/BANKNIFTY indices + limited option contracts.
+        TASK 4: SUBSCRIBE TO NIFTY/BANKNIFTY INDICES USING REGISTRY ONLY
         """
 
         try:
 
             instrument_registry = get_instrument_registry()
             await instrument_registry.wait_until_ready()
+            
+            # Store instrument registry for expiry detection
+            self.instrument_registry = instrument_registry
+            
+            # Debug logging for registry structure
+            logger.info(f"Registry attributes → {dir(self.instrument_registry)}")
+            
+            # Detect NIFTY expiry if not already set
+            if not self.current_expiry:
+                self.current_expiry = self.get_nearest_nifty_expiry()
+                logger.info(f"DETECTED NIFTY EXPIRY → {self.current_expiry}")
 
             # ------------------------------------------------
-            # TEST MINIMAL SUBSCRIPTION FIRST (STEP 4)
+            # TASK 4: GET INSTRUMENT KEYS FROM REGISTRY (OPTIONS/FUTURES) + INDEX KEYS
             # ------------------------------------------------
             
-            instrument_keys = [
-                "NSE_INDEX|NIFTY 50",
-                "NSE_INDEX|NIFTY BANK",
-                "NSE_EQ|INE009A01021"
+            # Use registry to get correct instrument keys
+            instrument_keys = []
+            
+            # TASK 4: ADD INDEX INSTRUMENTS DIRECTLY (NOT IN REGISTRY)
+            # Index instruments are not in the options/futures registry
+            index_instruments = [
+                "NSE_INDEX|Nifty 50",
+                "NSE_INDEX|Nifty Bank"
             ]
             
-            logger.info("INSTRUMENT KEYS (CORRECTED):")
+            for index_key in index_instruments:
+                instrument_keys.append(index_key)
+                logger.info(f"INDEX INSTRUMENT: {index_key}")
+            
+            # TASK 4: ADD DEFENSIVE CHECK
+            if not instrument_keys:
+                logger.error("NO INSTRUMENT KEYS FOUND")
+                raise Exception("Instrument registry returned zero keys")
+            
+            logger.info("=== INSTRUMENT KEYS FOR SUBSCRIPTION ===")
             for k in instrument_keys:
                 logger.info(k)
 
             # ------------------------------------------------
-            # Subscription payload
+            # TASK 5: SUBSCRIPTION PAYLOAD WITH LTPC MODE
             # ------------------------------------------------
 
             payload = {
                 "guid": "strikeiq-feed",
                 "method": "sub",
                 "data": {
-                    "mode": "ltpc",
+                    "mode": "ltpc",  # TASK 5: CHANGED FROM "full" TO "ltpc"
                     "instrumentKeys": instrument_keys
                 }
             }
 
-            logger.info("SUBSCRIPTION PAYLOAD:")
+            logger.info("=== SUBSCRIPTION PAYLOAD ===")
             logger.info(json.dumps(payload, indent=2))
-            logger.info(f"UPSTOX SUBSCRIPTION PAYLOAD={len(instrument_keys)} instruments")
-
-            # STEP 1: Confirm subscription details
-            logger.info(f"SUBSCRIBE MODE: {payload['data']['mode']}")
-            logger.info(f"INSTRUMENT COUNT: {len(payload['data']['instrumentKeys'])}")
-            for key in payload["data"]["instrumentKeys"]:
-                logger.info(f"SUBSCRIBING → {key}")
+            logger.info(f"INSTRUMENT COUNT: {len(instrument_keys)}")
 
             if self.websocket is None:
                 logger.error("WebSocket not initialized")
                 return
 
-            await self.websocket.send(json.dumps(payload))
+            # TASK 5: CRITICAL - ADD 1-SECOND DELAY BEFORE SUBSCRIPTION
+            logger.info("⏳ WAITING 1 SECOND BEFORE SUBSCRIPTION...")
+            await asyncio.sleep(1)
+            
+            await self.websocket.send(json.dumps(payload).encode("utf-8"))
 
-            # STEP 1: Confirm subscription sent
-            logger.info("SUBSCRIPTION MESSAGE SENT TO UPSTOX — WAITING FOR DATA")
-
-            logger.info("📡 MINIMAL INDICES SUBSCRIPTION SENT")
+            # Confirm subscription sent
+            logger.info("✅ SUBSCRIPTION SENT - WAITING FOR MARKET DATA")
+            
+            # TASK 6: START FAILSAFE TIMER FOR NO DATA DETECTION
+            asyncio.create_task(self._failsafe_no_data_check())
 
         except Exception as e:
 
             logger.error(f"Subscription failed: {e}")
+
+    async def subscribe_options(self, instrument_keys):
+        """Subscribe to option instruments"""
+        try:
+            # Unsubscribe from old options first
+            await self.unsubscribe_options()
+            
+            payload = {
+                "guid": "strikeiq-options",
+                "method": "sub",
+                "data": {
+                    "mode": "full",
+                    "instrumentKeys": instrument_keys
+                }
+            }
+            
+            if self.websocket:
+                await self.websocket.send(json.dumps(payload))
+                self.current_option_keys = instrument_keys
+                logger.info(f"✅ OPTIONS SUBSCRIPTION SENT: {len(instrument_keys)} instruments")
+            else:
+                logger.error("Cannot subscribe to options - WebSocket not connected")
+                
+        except Exception as e:
+            logger.error(f"Option subscription failed: {e}")
+
+    def parse_expiry(self, expiry: str):
+        """
+        Parse expiry strings from Upstox instrument registry.
+        Supports ISO and legacy formats.
+        """
+        formats = [
+            "%Y-%m-%d",   # Upstox registry format (PRIMARY)
+            "%d-%b-%Y",
+            "%d%b%Y",
+            "%d%b"
+        ]
+        
+        for fmt in formats:
+            try:
+                parsed = datetime.strptime(expiry, fmt)
+                
+                # If year missing (example: 27MAR)
+                if parsed.year == 1900:
+                    parsed = parsed.replace(year=datetime.now().year)
+                
+                return parsed
+                
+            except ValueError:
+                continue
+        
+        logger.warning(f"Invalid expiry format: {expiry}")
+        return None
+
+    def get_nearest_nifty_expiry(self):
+        """Get the nearest NIFTY expiry from instrument registry"""
+        if not self.instrument_registry:
+            logger.error("Instrument registry not loaded")
+            return None
+
+        expiries = []
+        logger.info("SCANNING REGISTRY FOR NIFTY EXPIRIES")
+
+        # Use registry methods instead of direct data access
+        expiries = self.instrument_registry.get_expiries("NIFTY")
+
+        valid_expiries = []
+
+        for expiry in expiries:
+            parsed = self.parse_expiry(expiry)
+            
+            if parsed:
+                valid_expiries.append((parsed, expiry))
+
+        if not valid_expiries:
+            logger.error("No valid NIFTY expiries detected")
+            return None
+
+        nearest_expiry, nearest_expiry_str = min(valid_expiries, key=lambda x: x[0])
+
+        logger.info(f"AVAILABLE EXPIRIES → {expiries}")
+        logger.info(f"DETECTED NIFTY EXPIRY → {nearest_expiry_str}")
+
+        return nearest_expiry_str
+
+    async def unsubscribe_options(self):
+        """Unsubscribe from current option instruments"""
+        if not self.current_option_keys:
+            return
+            
+        try:
+            payload = {
+                "guid": "strikeiq-options-unsub",
+                "method": "unsub",
+                "data": {
+                    "instrumentKeys": self.current_option_keys
+                }
+            }
+            
+            if self.websocket:
+                await self.websocket.send(json.dumps(payload))
+                logger.info(f"UNSUBSCRIBED {len(self.current_option_keys)} OLD OPTIONS")
+                self.current_option_keys = []
+            else:
+                logger.error("Cannot unsubscribe from options - WebSocket not connected")
+                
+        except Exception as e:
+            logger.error(f"Option unsubscription failed: {e}")
 
     async def maintain_connection(self):
         """Maintain WebSocket connection with reconnect loop"""
@@ -313,13 +473,23 @@ class WebSocketMarketFeed:
 
                 raw = await self.websocket.recv()
                 
-                # STEP 3: Improve WebSocket frame diagnostics
-                logger.info("WS FRAME RECEIVED")
+                # STEP 1: MARKET DATA ENTRY POINT - DEBUG ONLY
+                if TICK_DEBUG:
+                    logger.debug("WS FRAME RECEIVED")
 
                 if not raw:
                     continue
 
-                # STEP 4: Detect JSON control frames
+                # STEP 1: PACKET SIZE LOGGING - DEBUG ONLY
+                packet_size = len(raw)
+                if TICK_DEBUG:
+                    logger.debug(f"PACKET SIZE = {packet_size}")
+                
+                # STEP 1: PROTOBUF DECODING LOGS - DEBUG ONLY
+                if TICK_DEBUG:
+                    logger.debug("STARTING PROTOBUF DECODE")
+                
+                # STEP 1: Detect JSON control frames
                 if isinstance(raw, str):
                     logger.info(f"WS CONTROL MESSAGE: {raw}")
                     try:
@@ -342,23 +512,31 @@ class WebSocketMarketFeed:
                     logger.warning(f"UNKNOWN FRAME TYPE: {type(raw)}")
                     continue
 
-                packet_size = len(raw)
+                # STEP 3: CRITICAL - RAW MESSAGE DEBUGGING BEFORE PARSING
+                logger.info(f"=== RAW MESSAGE DEBUG ===")
+                logger.info(f"RAW MESSAGE TYPE: {type(raw)}")
+                logger.info(f"RAW PACKET SIZE: {len(raw)}")
                 
-                # STEP 3: Improve packet diagnostics based on size
-                if packet_size < 200:
-                    logger.debug(f"HEARTBEAT PACKET SIZE={packet_size}")
-                else:
-                    logger.info(f"MARKET DATA PACKET SIZE={packet_size}")
-
-                # STEP 3: Always attempt protobuf decode
-                logger.info("DECODING PROTOBUF MESSAGE")
+                # Log first 50 bytes for structure analysis
+                if len(raw) > 0:
+                    sample_bytes = raw[:50]
+                    logger.info(f"FIRST 50 BYTES: {sample_bytes.hex()}")
+                
+                # STEP 4: DECODE PROTOBUF
                 ticks = decode_protobuf_message(raw)
-
+                
+                if TICK_DEBUG:
+                    logger.debug(f"TICKS PARSED = {len(ticks)}")
+                
+                # STEP 1: EMPTY TICKS WARNING
                 if not ticks:
-                    logger.debug("No ticks in packet")
-
+                    if TICK_DEBUG:
+                        logger.warning("NO TICKS IN MESSAGE")
+                    
                 if ticks:
-                    logger.info(f"PUSHING {len(ticks)} TICKS INTO QUEUE")
+                    # STEP 2: TICK PIPELINE TRACE - DEBUG ONLY
+                    if TICK_DEBUG:
+                        logger.debug("PUSHING TICKS INTO ANALYTICS QUEUE")
                     self.last_tick_timestamp = datetime.now()
                     await self._message_queue.put(ticks)
 
@@ -371,7 +549,7 @@ class WebSocketMarketFeed:
                 break
 
     async def _process_loop(self):
-        """Process queued binary messages: decode protobuf → extract ticks → broadcast."""
+        """Process queued binary messages: decode protobuf → route ticks → broadcast."""
 
         logger.info("PROCESS LOOP STARTED")
 
@@ -382,11 +560,75 @@ class WebSocketMarketFeed:
                 ticks = await self._message_queue.get()
                 logger.info("PROCESSING TICK FROM QUEUE")
                 
-                await self.broadcast_ticks(ticks)
+                # Process each tick through message router
+                for tick in ticks:
+                    # Route tick to appropriate processor
+                    message = message_router.route_tick(tick)
+                    
+                    if message:
+                        # Handle different message types
+                        await self._handle_routed_message(message)
+                
+                # STEP 2: QUEUE WORKER TRACE - DEBUG ONLY
+                if TICK_DEBUG:
+                    logger.debug("ANALYTICS QUEUE WORKER ACTIVE")
 
             except Exception as e:
 
                 logger.error(f"Process error: {e}")
+
+    async def _handle_routed_message(self, message):
+        """Handle routed messages and update appropriate components"""
+        try:
+            message_type = message["type"]
+            symbol = message["symbol"]
+            
+            if message_type == "index_tick":
+                # Update option chain builder with new spot price
+                ltp = message["data"]["ltp"]
+                option_chain_builder.update_index_price(symbol, ltp)
+                
+                # Detect ATM and subscribe to options for NIFTY
+                if symbol == "NIFTY":
+                    atm = get_atm_strike(ltp)
+                    
+                    if atm != self.current_atm:
+                        self.current_atm = atm
+                        
+                        option_keys = build_option_keys(
+                            symbol="NIFTY",
+                            atm=atm,
+                            expiry=self.current_expiry
+                        )
+                        
+                        # Limit subscription to prevent overload
+                        if len(option_keys) > 60:
+                            option_keys = option_keys[:60]
+                        
+                        logger.info(f"SUBSCRIBING OPTIONS AROUND ATM {atm}")
+                        logger.info(f"EXPIRY → {self.current_expiry}")
+                        logger.info(f"TOTAL OPTIONS → {len(option_keys)}")
+                        
+                        await self.subscribe_options(option_keys)
+                
+                # Broadcast index tick immediately
+                await manager.broadcast(message)
+                
+            elif message_type == "option_tick":
+                # Update option chain builder with option data
+                strike = message["data"]["strike"]
+                right = message["data"]["right"]
+                ltp = message["data"]["ltp"]
+                
+                option_chain_builder.update_option_tick(symbol, strike, right, ltp)
+                
+                # Option ticks are included in chain snapshots, no individual broadcast
+                
+            else:
+                logger.warning(f"Unknown message type: {message_type}")
+                
+        except Exception as e:
+            logger.error(f"Error handling routed message: {e}")
 
     async def _handle_disconnect(self):
         """Handle WebSocket disconnect with automatic reconnect and resubscribe (STEP 8)"""
@@ -422,6 +664,11 @@ class WebSocketMarketFeed:
         self.running = False
         self.is_connected = False
 
+        # Stop new components
+        await option_chain_builder.stop()
+        await oi_heatmap_engine.stop()
+        await analytics_broadcaster.stop()
+
         await self._cancel_tasks()
 
         try:
@@ -431,6 +678,20 @@ class WebSocketMarketFeed:
             pass
 
         await self._client.aclose()
+
+    async def _failsafe_no_data_check(self):
+        """
+        STEP7: FAILSAFE - Log warning if no market data received after 10 seconds
+        """
+        logger.info("⏱️ STARTING 10-SECOND FAILSAFE TIMER...")
+        await asyncio.sleep(10)
+        
+        if self.last_tick_timestamp is None:
+            logger.warning("⚠️ NO MARKET DATA RECEIVED AFTER SUBSCRIPTION")
+            logger.warning("   Check instrument keys and subscription mode")
+            logger.warning("   Verify Upstox V3 WebSocket feed is active")
+        else:
+            logger.info("✅ MARKET DATA RECEIVED WITHIN 10 SECONDS")
 
     async def _route_tick_to_builders(self, symbol, instrument_key, tick_data):
 
@@ -462,8 +723,16 @@ class WebSocketMarketFeed:
     async def broadcast_ticks(self, ticks):
         """Broadcast ticks to frontend"""
         for tick in ticks:
-            logger.info("BROADCASTING TICK TO FRONTEND")
+            # STEP 7: PERFORMANCE TRACE - DEBUG ONLY
+            if TICK_DEBUG:
+                start = time.time()
+            
+            logger.debug("BROADCASTING TICK TO FRONTEND")
             await manager.broadcast(tick)
+            
+            # STEP 7: PROCESSING LATENCY - DEBUG ONLY
+            if TICK_DEBUG:
+                logger.debug(f"PROCESSING LATENCY = {time.time() - start}")
 
 
 class WebSocketFeedManager:
@@ -511,3 +780,25 @@ class WebSocketFeedManager:
 
 
 ws_feed_manager = WebSocketFeedManager()
+
+
+# Helper functions for option subscription
+def get_atm_strike(price: float, step: int = 50) -> int:
+    """Calculate ATM strike rounded to nearest step"""
+    return int(round(price / step) * step)
+
+
+def build_option_keys(symbol: str, atm: int, expiry: str):
+    """Generate option keys around ATM strike"""
+    keys = []
+    
+    for i in range(-10, 11):
+        strike = atm + (i * 50)
+        
+        ce = f"NSE_FO|{symbol}{expiry}{strike}CE"
+        pe = f"NSE_FO|{symbol}{expiry}{strike}PE"
+        
+        keys.append(ce)
+        keys.append(pe)
+    
+    return keys

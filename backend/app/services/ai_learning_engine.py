@@ -7,9 +7,11 @@ Responsibilities:
 - Implement learning feedback loop
 """
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from ai.ai_db import ai_db
+from app.core.logging_config import AI_DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +173,10 @@ class AILearningEngine:
             True if successful, False otherwise
         """
         try:
+            # STEP 7: PERFORMANCE TRACE - DEBUG ONLY
+            if AI_DEBUG:
+                start = time.time()
+            
             # Get current performance
             performance = self.get_formula_performance(formula_id, self.learning_window_days)
             
@@ -222,6 +228,9 @@ class AILearningEngine:
                         description=f"Formula {formula_id} learning updated: success_rate={new_success_rate}%, adjusted_confidence={exp_adjusted_confidence}"
                     )
                     
+                    # STEP 7: PROCESSING LATENCY - DEBUG ONLY
+                    if AI_DEBUG:
+                        logger.info(f"PROCESSING LATENCY = {time.time() - start}")
                     return True
                 else:
                     logger.error(f"Failed to update formula experience for {formula_id}")
@@ -231,7 +240,7 @@ class AILearningEngine:
                 query = """
                     INSERT INTO formula_experience 
                     (formula_id, total_tests, wins, losses, success_rate, experience_adjusted_confidence, last_updated)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                 """
                 
                 params = (
@@ -251,6 +260,9 @@ class AILearningEngine:
                         description=f"Formula {formula_id} learning created: success_rate={new_success_rate}%, adjusted_confidence={exp_adjusted_confidence}"
                     )
                     
+                    # STEP 7: PROCESSING LATENCY - DEBUG ONLY
+                    if AI_DEBUG:
+                        logger.info(f"PROCESSING LATENCY = {time.time() - start}")
                     return True
                 else:
                     logger.error(f"Failed to create formula experience for {formula_id}")
@@ -309,12 +321,32 @@ class AILearningEngine:
             Number of formulas updated
         """
         try:
+            # STEP 6: AI LEARNING ENGINE TRACE - DEBUG ONLY
+            if AI_DEBUG:
+                logger.debug("AI LEARNING CYCLE STARTED")
+            
             formula_ids = self.get_all_active_formulas()
+            
+            # STEP 6: LOG FORMULAS DISCOVERED - DEBUG ONLY
+            if AI_DEBUG:
+                logger.debug(f"ACTIVE FORMULAS FOUND = {len(formula_ids)}")
+            
             formulas_updated = 0
             
             for formula_id in formula_ids:
+                # STEP 6: PROCESSING LEARNING FOR EACH FORMULA - DEBUG ONLY
+                if AI_DEBUG:
+                    logger.debug(f"PROCESSING LEARNING FOR FORMULA → {formula_id}")
+                
                 if self.update_formula_experience(formula_id):
+                    # STEP 6: LEARNING SUCCESS - DEBUG ONLY
+                    if AI_DEBUG:
+                        logger.info(f"LEARNING UPDATED → {formula_id}")
                     formulas_updated += 1
+                else:
+                    # STEP 6: LEARNING FAILURE - DEBUG ONLY
+                    if AI_DEBUG:
+                        logger.error(f"LEARNING FAILED → {formula_id}")
             
             logger.info(f"Learning update completed. Updated {formulas_updated}/{len(formula_ids)} formulas")
             return formulas_updated

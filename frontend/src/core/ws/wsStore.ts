@@ -6,6 +6,7 @@
  */
 
 import { create } from "zustand"
+import { uiLog } from "@/utils/uiLogger"
 
 interface WSStore {
   connected: boolean
@@ -141,9 +142,45 @@ export const useWSStore = create<WSStore>((set, get) => ({
     set({ error: `Unknown message type: ${message.type}` })
   },
 
-  setConnected: (v) => set({ connected: v }),
-  setMarketOpen: (v) => set({ marketOpen: v }),
-  setLastMessage: (msg) => set({ lastMessage: msg }),
-  setMarketData: (data) => set({ marketData: data }),
-  setError: (error) => set({ error })
+  setConnected: (v) => {
+    uiLog("STORE UPDATE", { 
+      store: "wsStore", 
+      action: "setConnected", 
+      connected: v 
+    })
+    set({ connected: v })
+  },
+  setMarketOpen: (v) => {
+    uiLog("STORE UPDATE", { 
+      store: "wsStore", 
+      action: "setMarketOpen", 
+      marketOpen: v 
+    })
+    set({ marketOpen: v })
+  },
+  setLastMessage: (msg) => {
+    uiLog("STORE UPDATE", { 
+      store: "wsStore", 
+      action: "setLastMessage", 
+      messageType: msg?.type 
+    })
+    set({ lastMessage: msg })
+  },
+  setMarketData: (data) => {
+    uiLog("STORE UPDATE", { 
+      store: "wsStore", 
+      action: "setMarketData", 
+      spot: data?.spot,
+      symbol: data?.symbol 
+    })
+    set({ marketData: data })
+  },
+  setError: (error) => {
+    uiLog("STORE UPDATE", { 
+      store: "wsStore", 
+      action: "setError", 
+      error 
+    })
+    set({ error })
+  }
 }))

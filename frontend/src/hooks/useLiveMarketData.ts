@@ -9,6 +9,7 @@ import { useState, useEffect, useRef } from "react"
 import { useWSStore } from "@/core/ws/wsStore"
 import { useOptionChainStore } from "@/core/ws/optionChainStore"
 import { throttle } from "@/utils/throttle"
+import { uiLog } from "@/utils/uiLogger"
 
 export interface LiveMarketData {
   symbol: string
@@ -35,6 +36,18 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
   const [error, setError] = useState<string | null>(null)
   const [mode, setMode] = useState<"loading" | "snapshot" | "live" | "error">("snapshot")
 
+  // Render loop detection
+  const renderCountRef = useRef(0)
+  renderCountRef.current++
+  
+  if (renderCountRef.current > 20) {
+    console.warn("⚠️ EXCESSIVE RENDER DETECTED in useLiveMarketData", {
+      renderCount: renderCountRef.current,
+      symbol,
+      expiry
+    })
+  }
+
   // READ ONLY from stores
   const { spot, lastUpdate, connected } = useWSStore()
   const { optionChainData, optionChainLastUpdate } = useOptionChainStore()
@@ -50,6 +63,13 @@ export function useLiveMarketData(symbol: string, expiry: string | null) {
       setError(null)
     }, 100)
   ).current
+
+  useEffect(() => {
+    uiLog("COMPONENT MOUNTED", "useLiveMarketData")
+    return () => {
+      uiLog("COMPONENT UNMOUNTED", "useLiveMarketData")
+    }
+  }, [])
 
   useEffect(() => {
     // Transform store data → UI data

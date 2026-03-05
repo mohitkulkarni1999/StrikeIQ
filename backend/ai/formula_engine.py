@@ -4,9 +4,11 @@ Lightweight, optimized for Intel i5 CPU, 8GB RAM
 """
 
 import logging
+import time
 from typing import Dict, List, Any, Optional
 from dataclasses import dataclass
 from datetime import datetime
+from app.core.logging_config import FORMULA_DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -42,12 +44,26 @@ class FormulaEngine:
         Run all 10 formulas on LiveMetrics
         Returns dict of formula_id -> FormulaSignal
         """
+        # STEP 4: FORMULA ENGINE TRACE
+        logger.info("FORMULA ENGINE START")
+        
+        # STEP 4: LOG NUMBER OF FORMULAS
+        logger.info(f"TOTAL FORMULAS LOADED = {len(self.formulas)}")
+        
         signals = {}
         
         try:
             for formula_id, formula_func in self.formulas.items():
+                # STEP 4: EVALUATING EACH FORMULA - DEBUG ONLY
+                if FORMULA_DEBUG:
+                    logger.debug(f"EVALUATING FORMULA → {formula_id}")
+                
                 signal = formula_func(metrics)
                 signals[formula_id] = signal
+                
+                # STEP 4: LOG RESULT - DEBUG ONLY
+                if FORMULA_DEBUG:
+                    logger.debug(f"FORMULA RESULT → {formula_id} : {signal.signal}")
                 
         except Exception as e:
             logger.error(f"FormulaEngine analysis error: {e}")

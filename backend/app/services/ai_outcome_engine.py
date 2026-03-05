@@ -14,6 +14,7 @@ from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from ai.ai_db import ai_db
 from ai.prediction_service import prediction_service
+from app.core.logging_config import AI_DEBUG
 
 logger = logging.getLogger(__name__)
 
@@ -198,6 +199,10 @@ class AIOutcomeEngine:
             True if successful, False otherwise
         """
         try:
+            # STEP 7: PERFORMANCE TRACE - DEBUG ONLY
+            if AI_DEBUG:
+                start = time.time()
+            
             query = """
                 INSERT INTO outcome_log 
                 (prediction_id, formula_id, outcome, confidence, evaluation_method, evaluation_time)
@@ -217,6 +222,10 @@ class AIOutcomeEngine:
             
             if result:
                 logger.info(f"Outcome stored: Prediction {prediction['id']} -> {outcome}")
+                
+                # STEP 7: PROCESSING LATENCY - DEBUG ONLY
+                if AI_DEBUG:
+                    logger.info(f"PROCESSING LATENCY = {time.time() - start}")
                 return True
             else:
                 logger.error(f"Failed to store outcome for prediction {prediction['id']}")
@@ -268,7 +277,22 @@ class AIOutcomeEngine:
         last_ai_run = now
         
         try:
+            # STEP 5: AI OUTCOME ENGINE TRACE - DEBUG ONLY
+            if AI_DEBUG:
+                logger.debug("AI OUTCOME ENGINE TRIGGERED")
+            
             predictions = self.get_pending_outcome_predictions()
+            
+            # STEP 5: INSIDE EVALUATION LOOP - DEBUG ONLY
+            if AI_DEBUG:
+                logger.debug("CHECKING PENDING OUTCOMES")
+            
+            # STEP 5: NO OUTCOMES WARNING - DEBUG ONLY
+            if not predictions:
+                if AI_DEBUG:
+                    logger.warning("NO OUTCOMES TO EVALUATE")
+                return 0
+            
             outcomes_evaluated = 0
             
             for prediction in predictions:
